@@ -153,7 +153,7 @@ func (c *ClientSet) MustCreateRoleBinding(t *testing.T, bindingName, roleName, s
 type DeploymentOpts func(obj *appsv1.Deployment)
 
 // WithServiceAccountName injects service account name to deployment before applying.
-func WithServiceAccountName(name string) DeploymentOpts {
+func DeploymentWithServiceAccountName(name string) DeploymentOpts {
 	return func(obj *appsv1.Deployment) {
 		obj.Spec.Template.Spec.ServiceAccountName = name
 	}
@@ -161,6 +161,74 @@ func WithServiceAccountName(name string) DeploymentOpts {
 
 // MustCreateDeployment creates a k8s deployment. Test fails if creation fails.
 func (c *ClientSet) MustCreateDeployment(t *testing.T, name string, opts ...DeploymentOpts) {
+	d1 := &appsv1.Deployment{
+		TypeMeta:   metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: nil,
+			Selector: nil,
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{},
+				Spec: v1.PodSpec{
+					Volumes:                       nil,
+					InitContainers:                nil,
+					Containers:                    nil,
+					EphemeralContainers:           nil,
+					RestartPolicy:                 "",
+					TerminationGracePeriodSeconds: nil,
+					ActiveDeadlineSeconds:         nil,
+					DNSPolicy:                     "",
+					NodeSelector:                  nil,
+					ServiceAccountName:            "",
+					DeprecatedServiceAccount:      "",
+					AutomountServiceAccountToken:  nil,
+					NodeName:                      "",
+					HostNetwork:                   false,
+					HostPID:                       false,
+					HostIPC:                       false,
+					ShareProcessNamespace:         nil,
+					SecurityContext:               nil,
+					ImagePullSecrets:              nil,
+					Hostname:                      "",
+					Subdomain:                     "",
+					Affinity:                      nil,
+					SchedulerName:                 "",
+					Tolerations:                   nil,
+					HostAliases:                   nil,
+					PriorityClassName:             "",
+					Priority:                      nil,
+					DNSConfig:                     nil,
+					ReadinessGates:                nil,
+					RuntimeClassName:              nil,
+					EnableServiceLinks:            nil,
+					PreemptionPolicy:              nil,
+					Overhead:                      nil,
+					TopologySpreadConstraints:     nil,
+					SetHostnameAsFQDN:             nil,
+					OS:                            nil,
+				},
+			},
+			Strategy: appsv1.DeploymentStrategy{
+				Type:          "",
+				RollingUpdate: nil,
+			},
+			MinReadySeconds:         0,
+			RevisionHistoryLimit:    nil,
+			Paused:                  false,
+			ProgressDeadlineSeconds: nil,
+		},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration:  0,
+			Replicas:            0,
+			UpdatedReplicas:     0,
+			ReadyReplicas:       0,
+			AvailableReplicas:   0,
+			UnavailableReplicas: 0,
+			Conditions:          nil,
+			CollisionCount:      nil,
+		},
+	}
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -196,5 +264,125 @@ func (c *ClientSet) MustCreateDeployment(t *testing.T, name string, opts ...Depl
 	}
 
 	_, err := c.k8s.AppsV1().Deployments("default").Create(context.Background(), deployment, metav1.CreateOptions{})
+	require.NoError(t, err)
+}
+
+// PodOpts defines a function type for changing deployments before being applied.
+type PodOpts func(obj *v1.Pod)
+
+// PodWithServiceAccountName injects service account name to pod before applying.
+func PodWithServiceAccountName(name string) PodOpts {
+	return func(obj *v1.Pod) {
+		obj.Spec.ServiceAccountName = name
+	}
+}
+
+// PodWithLabels injects Labels to Pod before applying.
+func PodWithLabels(labels map[string]string) PodOpts {
+	return func(obj *v1.Pod) {
+		obj.ObjectMeta.Labels = labels
+	}
+}
+
+//MustCreatePod creates a k8s pod. Test fails if creation fails
+func (c *ClientSet) MustCreatePod(t *testing.T, name string, opts ...PodOpts) {
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    map[string]string{"app": "test1"},
+		},
+		Spec: v1.PodSpec{
+			Volumes:        nil,
+			InitContainers: nil,
+			Containers: []v1.Container{
+				{
+					Name:  "nginx",
+					Image: "nginx:1.14.2",
+					Ports: []v1.ContainerPort{
+						{
+							ContainerPort: 80,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, opt := range opts {
+		opt(pod)
+	}
+
+	_, err := c.k8s.CoreV1().Pods("default").Create(context.Background(), pod, metav1.CreateOptions{})
+	require.NoError(t, err)
+}
+
+// ServiceOpts defines a function type for changing deployments before being applied.
+type ServiceOpts func(obj *v1.Service)
+
+// ServiceWithSelector injects Selector to Service before applying.
+func ServiceWithSelector(selector map[string]string) ServiceOpts {
+	return func(obj *v1.Service) {
+		obj.Spec.Selector = selector
+	}
+}
+
+//MustCreateService creates a k8s Service. Test fails if creation fails
+func (c *ClientSet) MustCreateService(t *testing.T, name string, opts ...ServiceOpts) {
+	service := &v1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "",
+			APIVersion: "",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:                       name,
+			GenerateName:               "",
+			Namespace:                  "default",
+			SelfLink:                   "",
+			UID:                        "",
+			ResourceVersion:            "",
+			Generation:                 0,
+			CreationTimestamp:          metav1.Time{},
+			DeletionTimestamp:          nil,
+			DeletionGracePeriodSeconds: nil,
+			Labels:                     nil,
+			Annotations:                nil,
+			OwnerReferences:            nil,
+			Finalizers:                 nil,
+			ClusterName:                "",
+			ManagedFields:              nil,
+		},
+		Spec: v1.ServiceSpec{
+			Ports:                         nil,
+			Selector:                      map[string]string{"app": "test1"},
+			ClusterIP:                     "",
+			ClusterIPs:                    nil,
+			Type:                          "",
+			ExternalIPs:                   nil,
+			SessionAffinity:               "",
+			LoadBalancerIP:                "",
+			LoadBalancerSourceRanges:      nil,
+			ExternalName:                  "",
+			ExternalTrafficPolicy:         "",
+			HealthCheckNodePort:           0,
+			PublishNotReadyAddresses:      false,
+			SessionAffinityConfig:         nil,
+			IPFamilies:                    nil,
+			IPFamilyPolicy:                nil,
+			AllocateLoadBalancerNodePorts: nil,
+			LoadBalancerClass:             nil,
+			InternalTrafficPolicy:         nil,
+		},
+		Status: v1.ServiceStatus{
+			LoadBalancer: v1.LoadBalancerStatus{},
+			Conditions:   nil,
+		},
+	}
+
+	for _, opt := range opts {
+		opt(service)
+	}
+
+	_, err := c.k8s.CoreV1().Services("default").Create(context.Background(), service, metav1.CreateOptions{})
 	require.NoError(t, err)
 }

@@ -55,6 +55,111 @@ func createConnectionAndStartServer(fakeCentral *centralDebug.FakeService) (*grp
 
 type resourceCreationFunction func(*testing.T, *k8s.ClientSet, chan *central.MsgFromSensor)
 
+// deployment + service + pod blind test pods -> services pods -> deployments
+// store.getMatchingServicesWithRoutes
+// deeper test without racing
+// deployment arrives correctly even if pod is sent last
+
+func Test_ServicesInconsistent(t *testing.T) {
+	fakeClient := k8s.MakeFakeClient()
+
+	utils.CrashOnError(os.Setenv("ROX_MTLS_CERT_FILE", "../../tools/local-sensor/certs/cert.pem"))
+	utils.CrashOnError(os.Setenv("ROX_MTLS_KEY_FILE", "../../tools/local-sensor/certs/key.pem"))
+	utils.CrashOnError(os.Setenv("ROX_MTLS_CA_FILE", "../../tools/local-sensor/certs/caCert.pem"))
+	utils.CrashOnError(os.Setenv("ROX_MTLS_CA_KEY_FILE", "../../tools/local-sensor/certs/caKey.pem"))
+
+	fakeCentral := centralDebug.MakeFakeCentralWithInitialMessages(
+		message.SensorHello("1234"),
+		message.ClusterConfig(),
+		message.PolicySync([]*storage.Policy{}),
+		message.BaselineSync([]*storage.ProcessBaseline{}))
+
+	conn, spyCentral, shutdownFakeServer := createConnectionAndStartServer(fakeCentral)
+	defer shutdownFakeServer()
+	fakeConnectionFactory := centralDebug.MakeFakeConnectionFactory(conn)
+
+	s, err := sensor.CreateSensor(sensor.ConfigWithDefaults().
+		WithK8sClient(fakeClient).
+		WithLocalSensor(true).
+		WithResyncPeriod(1 * time.Second).
+		WithCentralConnectionFactory(fakeConnectionFactory))
+
+	if err != nil {
+		panic(err)
+	}
+
+	go s.Start()
+	defer s.Stop()
+
+	spyCentral.ConnectionStarted.Wait()
+
+	testCases := map[string]struct {
+		orderedEvents  []resourceCreationFunction
+		deploymentName string
+	}{
+		// This should not work if re-sync is disabled, because deployment will be
+		// sent to central before RBAC is computed fully.
+		"Deployment first": {
+			orderedEvents: []resourceCreationFunction{
+				createDeployment("dep1", "sa1"),
+				createPod("p1", "sa1", map[string]string{"app": "test1"}),
+				createService("s1", map[string]string{"app": "test1"}),
+			},
+			deploymentName: "dep1",
+		},
+		// This should also not work, if just the role or just the bindings is
+		// available, the correct permission level won't be determined correctly.
+		"Deployment second": {
+			orderedEvents: []resourceCreationFunction{
+				createPod("p2", "sa2", map[string]string{"app": "test2"}),
+				createDeployment("dep2", "sa2"),
+				createService("s2", map[string]string{"app": "test2"}),
+			},
+			deploymentName: "dep2",
+		},
+		// This is the only case that should work if re-sync isn't enabled.
+		"Deployment last": {
+			orderedEvents: []resourceCreationFunction{
+				createPod("p3", "sa3", map[string]string{"app": "test3"}),
+				createService("s3", map[string]string{"app": "test3"}),
+				createDeployment("dep3", "sa3"),
+			},
+			deploymentName: "dep3",
+		},
+	}
+
+	fakeClient.SetupExampleCluster(t)
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fakeCentral.ClearReceivedBuffer()
+			receivedMessagesCh := make(chan *central.MsgFromSensor, 10)
+			fakeCentral.OnMessage(func(msg *central.MsgFromSensor) {
+				receivedMessagesCh <- msg
+			})
+
+			for _, fn := range testCase.orderedEvents {
+				// This function will create the fake k8s event and wait for the event to be fully flushed through
+				// sensor. This allows the tests to have a little more control in the order that events are being
+				// sent. Since each event is processed separately, the order they are received, doesn't necessarily
+				// guarantee that they will be fully processed first.
+				fn(t, fakeClient, receivedMessagesCh)
+			}
+			// Give some time for re-sync to happen (K8s client doesn't allow resync-time to be less than 1s)
+			time.Sleep(5 * time.Second)
+			allEvents := fakeCentral.GetAllMessages()
+			log.Println("EVENTS RECEIVED (in order):")
+			for pos, event := range allEvents {
+				fmt.Printf("\t%d: %v\n", pos, event)
+			}
+			eventsFound := getAllDeploymentEventsWithName(allEvents, testCase.deploymentName)
+			require.Greater(t, len(eventsFound), 0)
+			// Expect last event to have correct permission level
+			lastEvent := eventsFound[len(eventsFound)-1]
+			assert.Equal(t, storage.PermissionLevel_ELEVATED_IN_NAMESPACE, lastEvent.GetDeployment().GetServiceAccountPermissionLevel())
+		})
+	}
+}
+
 func Test_DeploymentInconsistent(t *testing.T) {
 	fakeClient := k8s.MakeFakeClient()
 
@@ -183,8 +288,22 @@ func createRoleBinding(bindingID, roleID, serviceAccount string) resourceCreatio
 
 func createDeployment(depName, serviceAccount string) resourceCreationFunction {
 	return func(t *testing.T, k *k8s.ClientSet, received chan *central.MsgFromSensor) {
-		k.MustCreateDeployment(t, depName, k8s.WithServiceAccountName(serviceAccount))
+		k.MustCreateDeployment(t, depName, k8s.DeploymentWithServiceAccountName(serviceAccount))
 		require.NoError(t, waitForResource(received, "Deployment", 2*time.Second))
+	}
+}
+
+func createPod(podName string, serviceAccountName string, labels map[string]string) resourceCreationFunction {
+	return func(t *testing.T, k *k8s.ClientSet, received chan *central.MsgFromSensor) {
+		k.MustCreatePod(t, podName, k8s.PodWithServiceAccountName(serviceAccountName), k8s.PodWithLabels(labels))
+		require.NoError(t, waitForResource(received, "Pod", 2*time.Second))
+	}
+}
+
+func createService(ServiceName string, selector map[string]string) resourceCreationFunction {
+	return func(t *testing.T, k *k8s.ClientSet, received chan *central.MsgFromSensor) {
+		k.MustCreateService(t, ServiceName, k8s.ServiceWithSelector(selector))
+		require.NoError(t, waitForResource(received, "Service", 2*time.Second))
 	}
 }
 
