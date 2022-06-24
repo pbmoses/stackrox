@@ -2,7 +2,6 @@ package dackbox
 
 import (
 	"github.com/stackrox/rox/central/globaldb"
-	"github.com/stackrox/rox/central/globalindex"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/dackbox"
 	"github.com/stackrox/rox/pkg/dackbox/indexer"
@@ -24,6 +23,7 @@ var (
 
 	toIndex  queue.WaitableQueue
 	registry indexer.WrapperRegistry
+	lazy     indexer.Lazy
 
 	globalKeyLock concurrency.KeyFence
 
@@ -36,12 +36,6 @@ var (
 func GetGlobalDackBox() *dackbox.DackBox {
 	initializeDackBox()
 	return duckBox
-}
-
-// GetIndexQueue returns the queue of items waiting to be indexed.
-func GetIndexQueue() queue.WaitableQueue {
-	initializeDackBox()
-	return toIndex
 }
 
 // GetKeyFence returns the global key fence.
@@ -65,9 +59,6 @@ func initializeDackBox() {
 		if err != nil {
 			log.Panicf("could not load stored indices: %v", err)
 		}
-
-		lazy = indexer.NewLazy(toIndex, registry, globalindex.GetGlobalIndex(), duckBox.AckIndexed)
-		lazy.Start()
 
 		if err := Init(duckBox, toIndex, registry, ReindexIfMissingBucket, DirtyBucket, needsReindexValue); err != nil {
 			log.Panicf("Could not initialize dackbox: %v", err)

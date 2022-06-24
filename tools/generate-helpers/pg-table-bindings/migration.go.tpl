@@ -60,7 +60,7 @@ var (
 {{$rocksDB :=  eq .Migration.MigrateFromDB "rocksdb" }}
 
 func move(legacyDB {{if $rocksDB}}*rocksdb.RocksDB{{else}}*bolt.DB{{end}}, gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
-	ctx := sac.WithGlobalAccessScopeChecker(context.Background(), sac.AllowAllAccessScopeChecker())
+	ctx := sac.WithAllAccess(context.Background())
 	store := pgStore.New({{if .Migration.SingletonStore}}ctx, {{end}}postgresDB)
 	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
 	{{- if .Migration.SingletonStore}}
