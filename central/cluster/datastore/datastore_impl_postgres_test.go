@@ -67,7 +67,7 @@ func (s *ClusterPostgresDataStoreTestSuite) SetupSuite() {
 	nsPostgres.Destroy(s.ctx, s.db)
 	clusterPostgres.Destroy(s.ctx, s.db)
 
-	gormDB := pgtest.OpenGormDB(s.T(), source, false)
+	gormDB := pgtest.OpenGormDB(s.T(), source)
 	defer pgtest.CloseGormDB(s.T(), gormDB)
 	ds, err := namespace.New(nsPostgres.CreateTableAndNewStore(s.ctx, s.db, gormDB), nil, nsPostgres.NewIndexer(s.db), nil, ranking.NamespaceRanker(), nil)
 	s.NoError(err)
@@ -89,6 +89,18 @@ func (s *ClusterPostgresDataStoreTestSuite) TearDownSuite() {
 	s.db.Close()
 	s.mockCtrl.Finish()
 	s.envIsolator.RestoreAll()
+}
+
+func (s *ClusterPostgresDataStoreTestSuite) TestSearchClusterStatus() {
+	ctx := sac.WithAllAccess(context.Background())
+
+	// At some point in the postgres migration, the following query did trigger an error
+	// because of a missing options map in the cluster health status schema.
+	// This test is there to ensure the search does not end in error for technical reasons.
+	query := pkgSearch.NewQueryBuilder().AddExactMatches(pkgSearch.ClusterStatus, storage.ClusterHealthStatus_UNHEALTHY.String()).ProtoQuery()
+	res, err := s.clusterDatastore.Search(ctx, query)
+	s.NoError(err)
+	s.Equal(0, len(res))
 }
 
 func (s *ClusterPostgresDataStoreTestSuite) TestSearchWithPostgres() {

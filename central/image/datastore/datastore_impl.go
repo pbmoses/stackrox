@@ -6,8 +6,8 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/globaldb"
-	"github.com/stackrox/rox/central/image/datastore/internal/search"
-	"github.com/stackrox/rox/central/image/datastore/internal/store"
+	"github.com/stackrox/rox/central/image/datastore/search"
+	"github.com/stackrox/rox/central/image/datastore/store"
 	"github.com/stackrox/rox/central/image/index"
 	"github.com/stackrox/rox/central/metrics"
 	"github.com/stackrox/rox/central/ranking"
@@ -317,6 +317,6 @@ func (ds *datastoreImpl) updateImagePriority(images ...*storage.Image) {
 
 func (ds *datastoreImpl) updateComponentRisk(image *storage.Image) {
 	for _, component := range image.GetScan().GetComponents() {
-		component.RiskScore = ds.imageComponentRanker.GetScoreForID(scancomponent.ComponentID(component.GetName(), component.GetVersion(), ""))
+		component.RiskScore = ds.imageComponentRanker.GetScoreForID(scancomponent.ComponentID(component.GetName(), component.GetVersion(), image.GetScan().GetOperatingSystem()))
 	}
 }

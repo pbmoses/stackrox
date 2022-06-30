@@ -8,13 +8,15 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/errorhelpers"
+	"github.com/stackrox/rox/pkg/features"
+	"github.com/stackrox/rox/pkg/nodes/converter"
 	pkgScanners "github.com/stackrox/rox/pkg/scanners"
 	"github.com/stackrox/rox/pkg/scanners/types"
 	"github.com/stackrox/rox/pkg/sync"
 )
 
 type enricherImpl struct {
-	cves cveSuppressor
+	cves CVESuppressor
 
 	lock     sync.RWMutex
 	scanners map[string]types.NodeScannerWithDataSource
@@ -97,6 +99,7 @@ func (e *enricherImpl) enrichNodeWithScanner(node *storage.Node, scanner types.N
 
 	scanStartTime := time.Now()
 	scan, err := scanner.GetNodeScan(node)
+
 	e.metrics.SetScanDurationTime(scanStartTime, scanner.Name(), err)
 	if err != nil {
 		return errors.Wrapf(err, "Error scanning '%s:%s' with scanner %q", node.GetClusterName(), node.GetName(), scanner.Name())
@@ -106,6 +109,12 @@ func (e *enricherImpl) enrichNodeWithScanner(node *storage.Node, scanner types.N
 	}
 
 	node.Scan = scan
+	if features.PostgresDatastore.Enabled() {
+		converter.FillV2NodeVulnerabilities(node)
+		for _, component := range node.GetScan().GetComponents() {
+			component.Vulns = nil
+		}
+	}
 	FillScanStats(node)
 
 	return nil
@@ -127,23 +136,46 @@ func FillScanStats(n *storage.Node) {
 	for _, c := range n.GetScan().GetComponents() {
 		var componentTopCVSS float32
 		var hasVulns bool
-		for _, v := range c.GetVulns() {
-			hasVulns = true
-			if _, ok := vulns[v.GetCve()]; !ok {
-				vulns[v.GetCve()] = false
-			}
 
-			if v.GetCvss() > componentTopCVSS {
-				componentTopCVSS = v.GetCvss()
-			}
+		if features.PostgresDatastore.Enabled() {
+			for _, v := range c.GetVulnerabilities() {
+				hasVulns = true
+				if _, ok := vulns[v.GetCveBaseInfo().GetCve()]; !ok {
+					vulns[v.GetCveBaseInfo().GetCve()] = false
+				}
 
-			if v.GetSetFixedBy() == nil {
-				continue
-			}
+				if v.GetCvss() > componentTopCVSS {
+					componentTopCVSS = v.GetCvss()
+				}
 
-			fixedByProvided = true
-			if v.GetFixedBy() != "" {
-				vulns[v.GetCve()] = true
+				if v.GetSetFixedBy() == nil {
+					continue
+				}
+
+				fixedByProvided = true
+				if v.GetFixedBy() != "" {
+					vulns[v.GetCveBaseInfo().GetCve()] = true
+				}
+			}
+		} else {
+			for _, v := range c.GetVulns() {
+				hasVulns = true
+				if _, ok := vulns[v.GetCve()]; !ok {
+					vulns[v.GetCve()] = false
+				}
+
+				if v.GetCvss() > componentTopCVSS {
+					componentTopCVSS = v.GetCvss()
+				}
+
+				if v.GetSetFixedBy() == nil {
+					continue
+				}
+
+				fixedByProvided = true
+				if v.GetFixedBy() != "" {
+					vulns[v.GetCve()] = true
+				}
 			}
 		}
 
