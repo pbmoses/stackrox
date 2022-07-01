@@ -160,6 +160,32 @@ func Test_ServicesInconsistent(t *testing.T) {
 	}
 }
 
+// TODO(jschnath) replace the function above with this one, using Freds new test framework
+// https://github.com/stackrox/stackrox/pull/2202/files
+// Steps:
+// 1.Create nginx-service.yaml and nginx-pod.yaml and integrate them in helper.go as vars
+// 2.keep going and debug from there
+/*
+func (s *RoleDependencySuite) Test_PermutationTest() {
+	s.testContext.RunWithResourcesPermutation(
+		[]resource.YamlTestFile{
+			resource.NginxDeployment,
+			resource.NginxService,
+			resource.NginxPod,
+		}, "Role Dependency", func(t *testing.T, testC *resource.TestContext) {
+			// Test context already takes care of creating and destroying resources
+			time.Sleep(2 * time.Second)
+			assertLastDeploymentHasPermissionLevel(
+				t,
+				testC.GetFakeCentral().GetAllMessages(),
+				storage.PermissionLevel_ELEVATED_IN_NAMESPACE,
+			)
+			testC.GetFakeCentral().ClearReceivedBuffer()
+		},
+	)
+}
+*/
+
 func Test_DeploymentInconsistent(t *testing.T) {
 	fakeClient := k8s.MakeFakeClient()
 
