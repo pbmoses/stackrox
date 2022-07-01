@@ -14,11 +14,11 @@ import (
 	"gorm.io/gorm"
 	"k8s.io/utils/env"
 
-	// unknow reason
+	// Ignore blank import warning as this is for test only
 	_ "github.com/lib/pq"
 )
 
-// TestPostgres refers to Postgres database for testing
+// TestPostgres is a Postgres instance used in tests
 type TestPostgres struct {
 	*pgxpool.Pool
 	database string
