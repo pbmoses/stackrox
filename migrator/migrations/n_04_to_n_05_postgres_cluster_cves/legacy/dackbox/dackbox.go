@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/stackrox/rox/generated/storage"
-	vulnDackBox "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/legacy/dackbox/crud"
 )
 
 func (b *storeImpl) GetIDs() ([]string, error) {
@@ -15,7 +14,7 @@ func (b *storeImpl) GetIDs() ([]string, error) {
 	defer dackTxn.Discard()
 
 	var ids []string
-	err = dackTxn.BucketKeyForEach(vulnDackBox.Bucket, true, func(k []byte) error {
+	err = dackTxn.BucketKeyForEach(Bucket, true, func(k []byte) error {
 		ids = append(ids, string(k))
 		return nil
 	})

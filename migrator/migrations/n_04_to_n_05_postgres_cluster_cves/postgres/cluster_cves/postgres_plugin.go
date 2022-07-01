@@ -13,7 +13,6 @@ import (
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/migrator/migrations/postgresmigrationhelper/metrics"
-	store "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/postgres"
 	"github.com/stackrox/rox/pkg/logging"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
@@ -40,7 +39,22 @@ var (
 	schema = pkgSchema.ClusterCvesSchema
 )
 
+type Store interface {
+	Count(ctx context.Context) (int, error)
+	Exists(ctx context.Context, id string) (bool, error)
+	Get(ctx context.Context, id string) (*storage.CVE, bool, error)
+	Upsert(ctx context.Context, obj *storage.CVE) error
+	UpsertMany(ctx context.Context, objs []*storage.CVE) error
+	Delete(ctx context.Context, id string) error
+	GetIDs(ctx context.Context) ([]string, error)
+	GetMany(ctx context.Context, ids []string) ([]*storage.CVE, []int, error)
+	DeleteMany(ctx context.Context, ids []string) error
 
+	Walk(ctx context.Context, fn func(obj *storage.CVE) error) error
+
+	AckKeysIndexed(ctx context.Context, keys ...string) error
+	GetKeysToIndex(ctx context.Context) ([]string, error)
+}
 
 type storeImpl struct {
 	db    *pgxpool.Pool
@@ -48,7 +62,7 @@ type storeImpl struct {
 }
 
 // New returns a new Store instance using the provided sql instance.
-func New(db *pgxpool.Pool) store.Store {
+func New(db *pgxpool.Pool) Store {
 	return &storeImpl{
 		db: db,
 	}
@@ -430,7 +444,7 @@ func Destroy(ctx context.Context, db *pgxpool.Pool) {
 }
 
 // CreateTableAndNewStore returns a new Store instance for testing
-func CreateTableAndNewStore(ctx context.Context, db *pgxpool.Pool, gormDB *gorm.DB) store.Store {
+func CreateTableAndNewStore(ctx context.Context, db *pgxpool.Pool, gormDB *gorm.DB) Store {
 	pkgSchema.ApplySchemaForTable(ctx, gormDB, baseTable)
 	return New(db)
 }

@@ -9,11 +9,13 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/migrator/migrations"
 	"github.com/stackrox/rox/migrator/migrations/loghelper"
-	legacy "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/legacy/dackbox"
+	legacy "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/legacy"
+	"github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/legacy/dackbox"
 	ccPgStore "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/postgres/cluster_cves"
 	icPgStore "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/postgres/image_cves"
 	ncPgStore "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/postgres/node_cves"
 	"github.com/stackrox/rox/migrator/types"
+	pkgdackbox "github.com/stackrox/rox/pkg/dackbox/raw"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
@@ -25,7 +27,7 @@ var (
 		StartingSeqNum: 100,
 		VersionAfter:   storage.Version{SeqNum: 101},
 		Run: func(databases *types.Databases) error {
-			legacyStore := legacy.New(databases.PkgRocksDB)
+			legacyStore := dackbox.New(pkgdackbox.GetGlobalDackBox(), pkgdackbox.GetKeyFence())
 			if err := move(databases.PkgRocksDB, databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
 				return errors.Wrap(err,
 					"moving cluster_cves from rocksdb to postgres")
@@ -34,7 +36,9 @@ var (
 		},
 	}
 	batchSize = 10000
-	schema    = pkgSchema.ClusterCvesSchema
+	clusterCveSchema    = pkgSchema.ClusterCvesSchema
+	imageCveSchema    = pkgSchema.ImageCvesSchema
+	nodeCveSchema    = pkgSchema.NodeCvesSchema
 	log       = loghelper.LogWrapper{}
 )
 
@@ -43,29 +47,112 @@ func move(legacyDB *rocksdb.RocksDB, gormDB *gorm.DB, postgresDB *pgxpool.Pool, 
 	clusterStore := ccPgStore.New(postgresDB)
 	imageStore := icPgStore.New(postgresDB)
 	nodeStore := ncPgStore.New(postgresDB)
-	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
+	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, clusterCveSchema.Table)
+	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, imageCveSchema.Table)
+	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, nodeCveSchema.Table)
 	var clusterCves []*storage.CVE
+	var imageCves []*storage.ImageCVE
+	var nodeCves []*storage.NodeCVE
 	var err error
 	legacyStore.Walk(ctx, func(obj *storage.CVE) error {
-		clusterCves = append(clusterCves, obj)
-		if len(clusterCves) == 10*batchSize {
-			if err := store.UpsertMany(ctx, clusterCves); err != nil {
-				log.WriteToStderrf("failed to persist cluster_cves to store %v", err)
-				return err
+		switch obj.Type {
+		case storage.CVE_IMAGE_CVE:
+			imageCves = append(imageCves, convertCveToImageCve(obj))
+			if len(imageCves) == batchSize {
+				if err := imageStore.UpsertMany(ctx, imageCves); err != nil {
+					log.WriteToStderrf("failed to persist cves to store %v", err)
+					return err
+				}
+				imageCves = imageCves[:0]
 			}
-			clusterCves = clusterCves[:0]
+
+		case storage.CVE_K8S_CVE, storage.CVE_OPENSHIFT_CVE, storage.CVE_ISTIO_CVE:
+			clusterCves = append(clusterCves, obj)
+			if len(clusterCves) == batchSize {
+				if err := clusterStore.UpsertMany(ctx, clusterCves); err != nil {
+					log.WriteToStderrf("failed to persist cluster_cves to store %v", err)
+					return err
+				}
+				clusterCves = clusterCves[:0]
+			}
+		case storage.CVE_NODE_CVE:
+			nodeCves = append(nodeCves, convertCveToNodeCve(obj))
+			if len(nodeCves) == batchSize {
+				if err := nodeStore.UpsertMany(ctx, nodeCves); err != nil {
+					log.WriteToStderrf("failed to persist node_cves to store %v", err)
+					return err
+				}
+				nodeCves = nodeCves[:0]
+			}
+		default:
+			log.WriteToStderrf("unexpected cve object type %v", obj.Type)
+			return err
 		}
 		return nil
 	})
+
 	if len(clusterCves) > 0 {
-		if err = store.UpsertMany(ctx, clusterCves); err != nil {
-			log.WriteToStderrf("failed to persist cluster_cves to store %v", err)
-			return err
-		}
+		clusterStore.UpsertMany(ctx, clusterCves)
+	}
+	if len(imageCves) > 0 {
+		imageStore.UpsertMany(ctx, imageCves)
+	}
+	if len(nodeCves) > 0 {
+		nodeStore.UpsertMany(ctx, nodeCves)
 	}
 	return nil
 }
 
 func init() {
 	migrations.MustRegisterMigration(migration)
+}
+
+func convertCveToNodeCve(cve *storage.CVE) *storage.NodeCVE {
+	return &storage.NodeCVE{
+		Id:                   cve.Id,
+		CveBaseInfo:          &storage.CVEInfo{
+			Cve:          cve.Cve,
+			Summary:      cve.Summary,
+			Link:         cve.Link,
+			PublishedOn:  cve.PublishedOn,
+			CreatedAt:    cve.CreatedAt,
+			LastModified: cve.LastModified,
+			ScoreVersion: storage.CVEInfo_ScoreVersion(cve.ScoreVersion),
+			CvssV2:       cve.CvssV2,
+			CvssV3:       cve.CvssV3,
+			// References:   cve.References, // need to figure out how to convert
+		},
+		OperatingSystem:      cve.OperatingSystem,
+		Cvss:                 cve.Cvss,
+		Severity:             cve.Severity,
+		ImpactScore:          cve.ImpactScore,
+		Snoozed:              false,
+		SnoozeStart:          nil,
+		SnoozeExpiry:         nil,
+	}
+}
+
+func convertCveToImageCve(cve *storage.CVE) *storage.ImageCVE {
+	return &storage.ImageCVE{
+		Id:                   cve.GetId(),
+		CveBaseInfo:          &storage.CVEInfo{
+			Cve:                  cve.Cve,
+			Summary:              cve.GetSummary(),
+			Link:                 cve.GetLink(),
+			PublishedOn:          cve.GetPublishedOn(),
+			CreatedAt:            cve.GetCreatedAt(),
+			LastModified:         cve.GetLastModified(),
+			ScoreVersion:         storage.CVEInfo_ScoreVersion(cve.GetScoreVersion()),
+			CvssV2:               cve.GetCvssV2(),
+			CvssV3:               cve.GetCvssV3(),
+			// References:           cve.GetReferences(),
+		},
+		OperatingSystem:      cve.OperatingSystem,
+		Cvss:                 cve.Cvss,
+		Severity:             cve.GetSeverity(),
+		ImpactScore:          cve.GetImpactScore(),
+		Snoozed:              false,
+		SnoozeStart:          nil,
+		SnoozeExpiry:         nil,
+	}
 }

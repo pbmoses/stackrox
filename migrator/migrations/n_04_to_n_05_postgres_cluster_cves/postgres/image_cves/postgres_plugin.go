@@ -13,7 +13,6 @@ import (
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/migrator/migrations/postgresmigrationhelper/metrics"
-	store "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/postgres"
 	"github.com/stackrox/rox/pkg/logging"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
@@ -33,6 +32,8 @@ const (
 	// to deal with failures if we just sent it all.  Something to think about as we
 	// proceed and move into more e2e and larger performance testing
 	batchSize = 10000
+
+	cursorBatchSize = 50
 )
 
 var (
@@ -40,19 +41,36 @@ var (
 	schema = pkgSchema.ImageCvesSchema
 )
 
+type Store interface {
+	Count(ctx context.Context) (int, error)
+	Exists(ctx context.Context, id string) (bool, error)
+	Get(ctx context.Context, id string) (*storage.ImageCVE, bool, error)
+	Upsert(ctx context.Context, obj *storage.ImageCVE) error
+	UpsertMany(ctx context.Context, objs []*storage.ImageCVE) error
+	Delete(ctx context.Context, id string) error
+	GetIDs(ctx context.Context) ([]string, error)
+	GetMany(ctx context.Context, ids []string) ([]*storage.ImageCVE, []int, error)
+	DeleteMany(ctx context.Context, ids []string) error
+
+	Walk(ctx context.Context, fn func(obj *storage.ImageCVE) error) error
+
+	AckKeysIndexed(ctx context.Context, keys ...string) error
+	GetKeysToIndex(ctx context.Context) ([]string, error)
+}
+
 type storeImpl struct {
 	db    *pgxpool.Pool
 	mutex sync.Mutex
 }
 
 // New returns a new Store instance using the provided sql instance.
-func New(db *pgxpool.Pool) store.Store {
+func New(db *pgxpool.Pool) Store {
 	return &storeImpl{
 		db: db,
 	}
 }
 
-func insertIntoImageCves(ctx context.Context, tx pgx.Tx, obj *storage.CVE) error {
+func insertIntoImageCves(ctx context.Context, tx pgx.Tx, obj *storage.ImageCVE) error {
 
 	serialized, marshalErr := obj.Marshal()
 	if marshalErr != nil {
@@ -62,18 +80,18 @@ func insertIntoImageCves(ctx context.Context, tx pgx.Tx, obj *storage.CVE) error
 	values := []interface{}{
 		// parent primary keys start
 		obj.GetId(),
-		obj.GetCve(),
+		obj.GetCveBaseInfo().GetCve(),
+		pgutils.NilOrTime(obj.GetCveBaseInfo().GetPublishedOn()),
+		pgutils.NilOrTime(obj.GetCveBaseInfo().GetCreatedAt()),
 		obj.GetCvss(),
-		obj.GetImpactScore(),
-		pgutils.NilOrTime(obj.GetPublishedOn()),
-		pgutils.NilOrTime(obj.GetCreatedAt()),
-		obj.GetSuppressed(),
-		pgutils.NilOrTime(obj.GetSuppressExpiry()),
 		obj.GetSeverity(),
+		obj.GetImpactScore(),
+		obj.GetSnoozed(),
+		pgutils.NilOrTime(obj.GetSnoozeExpiry()),
 		serialized,
 	}
 
-	finalStr := "INSERT INTO image_cves (Id, Cve, Cvss, ImpactScore, PublishedOn, CreatedAt, Suppressed, SuppressExpiry, Severity, serialized) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT(Id) DO UPDATE SET Id = EXCLUDED.Id, Cve = EXCLUDED.Cve, Cvss = EXCLUDED.Cvss, ImpactScore = EXCLUDED.ImpactScore, PublishedOn = EXCLUDED.PublishedOn, CreatedAt = EXCLUDED.CreatedAt, Suppressed = EXCLUDED.Suppressed, SuppressExpiry = EXCLUDED.SuppressExpiry, Severity = EXCLUDED.Severity, serialized = EXCLUDED.serialized"
+	finalStr := "INSERT INTO image_cves (Id, CveBaseInfo_Cve, CveBaseInfo_PublishedOn, CveBaseInfo_CreatedAt, Cvss, Severity, ImpactScore, Snoozed, SnoozeExpiry, serialized) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT(Id) DO UPDATE SET Id = EXCLUDED.Id, CveBaseInfo_Cve = EXCLUDED.CveBaseInfo_Cve, CveBaseInfo_PublishedOn = EXCLUDED.CveBaseInfo_PublishedOn, CveBaseInfo_CreatedAt = EXCLUDED.CveBaseInfo_CreatedAt, Cvss = EXCLUDED.Cvss, Severity = EXCLUDED.Severity, ImpactScore = EXCLUDED.ImpactScore, Snoozed = EXCLUDED.Snoozed, SnoozeExpiry = EXCLUDED.SnoozeExpiry, serialized = EXCLUDED.serialized"
 	_, err := tx.Exec(ctx, finalStr, values...)
 	if err != nil {
 		return err
@@ -82,7 +100,7 @@ func insertIntoImageCves(ctx context.Context, tx pgx.Tx, obj *storage.CVE) error
 	return nil
 }
 
-func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*storage.CVE) error {
+func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*storage.ImageCVE) error {
 
 	inputRows := [][]interface{}{}
 
@@ -96,21 +114,21 @@ func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*s
 
 		"id",
 
-		"cve",
+		"cvebaseinfo_cve",
+
+		"cvebaseinfo_publishedon",
+
+		"cvebaseinfo_createdat",
 
 		"cvss",
 
+		"severity",
+
 		"impactscore",
 
-		"publishedon",
+		"snoozed",
 
-		"createdat",
-
-		"suppressed",
-
-		"suppressexpiry",
-
-		"severity",
+		"snoozeexpiry",
 
 		"serialized",
 	}
@@ -128,21 +146,21 @@ func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*s
 
 			obj.GetId(),
 
-			obj.GetCve(),
+			obj.GetCveBaseInfo().GetCve(),
+
+			pgutils.NilOrTime(obj.GetCveBaseInfo().GetPublishedOn()),
+
+			pgutils.NilOrTime(obj.GetCveBaseInfo().GetCreatedAt()),
 
 			obj.GetCvss(),
 
+			obj.GetSeverity(),
+
 			obj.GetImpactScore(),
 
-			pgutils.NilOrTime(obj.GetPublishedOn()),
+			obj.GetSnoozed(),
 
-			pgutils.NilOrTime(obj.GetCreatedAt()),
-
-			obj.GetSuppressed(),
-
-			pgutils.NilOrTime(obj.GetSuppressExpiry()),
-
-			obj.GetSeverity(),
+			pgutils.NilOrTime(obj.GetSnoozeExpiry()),
 
 			serialized,
 		})
@@ -175,8 +193,8 @@ func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*s
 	return err
 }
 
-func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.CVE) error {
-	conn, release, err := s.acquireConn(ctx, ops.Get, "CVE")
+func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ImageCVE) error {
+	conn, release, err := s.acquireConn(ctx, ops.Get, "ImageCVE")
 	if err != nil {
 		return err
 	}
@@ -199,8 +217,8 @@ func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.CVE) error {
 	return nil
 }
 
-func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.CVE) error {
-	conn, release, err := s.acquireConn(ctx, ops.Get, "CVE")
+func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ImageCVE) error {
+	conn, release, err := s.acquireConn(ctx, ops.Get, "ImageCVE")
 	if err != nil {
 		return err
 	}
@@ -225,15 +243,13 @@ func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.CVE) error {
 	return nil
 }
 
-func (s *storeImpl) Upsert(ctx context.Context, obj *storage.CVE) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Upsert, "CVE")
-
+func (s *storeImpl) Upsert(ctx context.Context, obj *storage.ImageCVE) error {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Upsert, "ImageCVE")
 	return s.upsert(ctx, obj)
 }
 
-func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.CVE) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.UpdateMany, "CVE")
-
+func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.ImageCVE) error {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.UpdateMany, "ImageCVE")
 	// Lock since copyFrom requires a delete first before being executed.  If multiple processes are updating
 	// same subset of rows, both deletes could occur before the copyFrom resulting in unique constraint
 	// violations
@@ -249,7 +265,7 @@ func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.CVE) error {
 
 // Count returns the number of objects in the store
 func (s *storeImpl) Count(ctx context.Context) (int, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Count, "CVE")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Count, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 
@@ -258,7 +274,7 @@ func (s *storeImpl) Count(ctx context.Context) (int, error) {
 
 // Exists returns if the id exists in the store
 func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Exists, "CVE")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Exists, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 
@@ -272,8 +288,8 @@ func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
 }
 
 // Get returns the object, if it exists from the store
-func (s *storeImpl) Get(ctx context.Context, id string) (*storage.CVE, bool, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "CVE")
+func (s *storeImpl) Get(ctx context.Context, id string) (*storage.ImageCVE, bool, error) {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 
@@ -287,7 +303,7 @@ func (s *storeImpl) Get(ctx context.Context, id string) (*storage.CVE, bool, err
 		return nil, false, pgutils.ErrNilIfNoRows(err)
 	}
 
-	var msg storage.CVE
+	var msg storage.ImageCVE
 	if err := proto.Unmarshal(data, &msg); err != nil {
 		return nil, false, err
 	}
@@ -305,7 +321,7 @@ func (s *storeImpl) acquireConn(ctx context.Context, op ops.Op, typ string) (*pg
 
 // Delete removes the specified ID from the store
 func (s *storeImpl) Delete(ctx context.Context, id string) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "CVE")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 
@@ -319,7 +335,7 @@ func (s *storeImpl) Delete(ctx context.Context, id string) error {
 
 // GetIDs returns all the IDs for the store
 func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetAll, "storage.CVEIDs")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetAll, "storage.ImageCVEIDs")
 	var sacQueryFilter *v1.Query
 
 	result, err := postgres.RunSearchRequestForSchema(schema, sacQueryFilter, s.db)
@@ -336,8 +352,8 @@ func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
 }
 
 // GetMany returns the objects specified by the IDs or the index in the missing indices slice
-func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.CVE, []int, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetMany, "CVE")
+func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.ImageCVE, []int, error) {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetMany, "ImageCVE")
 
 	if len(ids) == 0 {
 		return nil, nil, nil
@@ -361,9 +377,9 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.CVE, 
 		}
 		return nil, nil, err
 	}
-	resultsByID := make(map[string]*storage.CVE)
+	resultsByID := make(map[string]*storage.ImageCVE)
 	for _, data := range rows {
-		msg := &storage.CVE{}
+		msg := &storage.ImageCVE{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return nil, nil, err
 		}
@@ -372,7 +388,7 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.CVE, 
 	missingIndices := make([]int, 0, len(ids)-len(resultsByID))
 	// It is important that the elems are populated in the same order as the input ids
 	// slice, since some calling code relies on that to maintain order.
-	elems := make([]*storage.CVE, 0, len(resultsByID))
+	elems := make([]*storage.ImageCVE, 0, len(resultsByID))
 	for i, id := range ids {
 		if result, ok := resultsByID[id]; !ok {
 			missingIndices = append(missingIndices, i)
@@ -385,7 +401,7 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.CVE, 
 
 // Delete removes the specified IDs from the store
 func (s *storeImpl) DeleteMany(ctx context.Context, ids []string) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.RemoveMany, "CVE")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.RemoveMany, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 
@@ -398,19 +414,29 @@ func (s *storeImpl) DeleteMany(ctx context.Context, ids []string) error {
 }
 
 // Walk iterates over all of the objects in the store and applies the closure
-func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.CVE) error) error {
+func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ImageCVE) error) error {
 	var sacQueryFilter *v1.Query
-	rows, err := postgres.RunGetManyQueryForSchema(ctx, schema, sacQueryFilter, s.db)
+	fetcher, closer, err := postgres.RunCursorQueryForSchema(ctx, schema, sacQueryFilter, s.db)
 	if err != nil {
-		return pgutils.ErrNilIfNoRows(err)
+		return err
 	}
-	for _, data := range rows {
-		var msg storage.CVE
-		if err := proto.Unmarshal(data, &msg); err != nil {
-			return err
+	defer closer()
+	for {
+		rows, err := fetcher(cursorBatchSize)
+		if err != nil {
+			return pgutils.ErrNilIfNoRows(err)
 		}
-		if err := fn(&msg); err != nil {
-			return err
+		for _, data := range rows {
+			var msg storage.ImageCVE
+			if err := proto.Unmarshal(data, &msg); err != nil {
+				return err
+			}
+			if err := fn(&msg); err != nil {
+				return err
+			}
+		}
+		if len(rows) != cursorBatchSize {
+			break
 		}
 	}
 	return nil
@@ -428,7 +454,7 @@ func Destroy(ctx context.Context, db *pgxpool.Pool) {
 }
 
 // CreateTableAndNewStore returns a new Store instance for testing
-func CreateTableAndNewStore(ctx context.Context, db *pgxpool.Pool, gormDB *gorm.DB) store.Store {
+func CreateTableAndNewStore(ctx context.Context, db *pgxpool.Pool, gormDB *gorm.DB) Store {
 	pkgSchema.ApplySchemaForTable(ctx, gormDB, baseTable)
 	return New(db)
 }

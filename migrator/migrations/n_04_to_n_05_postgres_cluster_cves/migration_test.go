@@ -9,10 +9,15 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stackrox/rox/generated/storage"
-	legacy "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/legacy"
+	legacy "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/legacy/dackbox"
+	"github.com/stackrox/rox/migrator/migrations/postgresmigrationhelper"
+	"github.com/stackrox/rox/pkg/concurrency"
+	"github.com/stackrox/rox/pkg/dackbox"
 	"github.com/stackrox/rox/pkg/features"
+	postgres2 "github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
+	"github.com/stackrox/rox/pkg/postgres/walker"
 	"github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
@@ -63,42 +68,59 @@ func (s *postgresMigrationSuite) SetupTest() {
 	s.ctx = sac.WithAllAccess(context.Background())
 	s.pool, err = pgxpool.ConnectConfig(s.ctx, config)
 	s.Require().NoError(err)
-	pgtest.CleanUpDB(s.T(), s.ctx, s.pool)
-	s.gormDB = pgtest.OpenGormDB(s.T(), source, true)
+	pgtest.CleanUpDB(s.ctx, s.T(), s.pool)
+	s.gormDB = pgtest.OpenGormDBWithDisabledConstraints(s.T(), source)
 }
 
 func (s *postgresMigrationSuite) TearDownTest() {
 	rocksdbtest.TearDownRocksDB(s.legacyDB)
 	_ = s.gormDB.Migrator().DropTable(pkgSchema.CreateTableClusterCvesStmt.GormModel)
-	pgtest.CleanUpDB(s.T(), s.ctx, s.pool)
+	pgtest.CleanUpDB(s.ctx, s.T(), s.pool)
 	pgtest.CloseGormDB(s.T(), s.gormDB)
 	s.pool.Close()
 }
 func (s *postgresMigrationSuite) TestMigration() {
 	// Prepare data and write to legacy DB
 	var cVEs []*storage.CVE
-	legacyStore, err := legacy.New(s.legacyDB)
+	dacky, err := dackbox.NewRocksDBDackBox(s.legacyDB, nil, []byte("graph"), []byte("dirty"), []byte("valid"))
 	s.NoError(err)
+	legacyStore := legacy.New(dacky, concurrency.NewKeyFence())
 	batchSize = 48
 	rocksWriteBatch := gorocksdb.NewWriteBatch()
 	defer rocksWriteBatch.Destroy()
 	for i := 0; i < 200; i++ {
 		cVE := &storage.CVE{}
 		s.NoError(testutils.FullInit(cVE, testutils.UniqueInitializer(), testutils.JSONFieldsFilter))
+		cVE.Type = storage.CVE_CVEType(int(cVE.Type) % (len(storage.CVE_CVEType_value)-1)+1)
 		cVEs = append(cVEs, cVE)
+		s.NoError(legacyStore.Upsert(s.ctx, cVE))
 	}
-	s.NoError(legacyStore.UpsertMany(s.ctx, cVEs))
+
 	s.NoError(move(s.legacyDB, s.gormDB, s.pool, legacyStore))
 	var count int64
-	s.gormDB.Model(pkgSchema.CreateTableClusterCvesStmt.GormModel).Count(&count)
+	for _, stmt := range []*postgres2.CreateStmts{
+		pkgSchema.CreateTableClusterCvesStmt,
+		pkgSchema.CreateTableImageCvesStmt,
+		pkgSchema.CreateTableNodeCvesStmt,
+	} {
+		count += postgresmigrationhelper.CountObjectWithModel(s.gormDB, stmt.GormModel)
+	}
 	s.Equal(int64(len(cVEs)), count)
 	for _, cVE := range cVEs {
-		s.Equal(cVE, s.get(cVE.GetId()))
+		switch cVE.Type {
+		case storage.CVE_IMAGE_CVE:
+			// s.Equal(cVE, s.get(imageCveSchema, cVE.GetId()))
+		case storage.CVE_K8S_CVE, storage.CVE_OPENSHIFT_CVE, storage.CVE_ISTIO_CVE:
+			s.Equal(cVE, s.get(clusterCveSchema, cVE.GetId()))
+		case storage.CVE_NODE_CVE:
+		     //s.Equal(cVE, s.get(nodeCveSchema, cVE.GetId()))
+		default:
+			log.WriteToStderrf("unexpected cve object type %v", cVE.Type)
+		}
 	}
 }
 
-func (s *postgresMigrationSuite) get(id string) *storage.CVE {
-
+func (s *postgresMigrationSuite) get(schema *walker.Schema, id string) *storage.CVE {
 	q := search.ConjunctionQuery(
 		search.NewQueryBuilder().AddDocIDs(id).ProtoQuery(),
 	)

@@ -9,7 +9,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/stackrox/rox/generated/storage"
 	store "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/legacy"
-	vulnDackBox "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_cluster_cves/legacy/dackbox/crud"
 	"github.com/stackrox/rox/migrator/migrations/postgresmigrationhelper/metrics"
 	"github.com/stackrox/rox/pkg/batcher"
 	"github.com/stackrox/rox/pkg/concurrency"
@@ -39,7 +38,7 @@ func (b *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
 	}
 	defer dackTxn.Discard()
 
-	exists, err := vulnDackBox.Reader.ExistsIn(vulnDackBox.BucketHandler.GetKey(id), dackTxn)
+	exists, err := Reader.ExistsIn(BucketHandler.GetKey(id), dackTxn)
 	if err != nil {
 		return false, err
 	}
@@ -56,7 +55,7 @@ func (b *storeImpl) Count(ctx context.Context) (int, error) {
 	}
 	defer dackTxn.Discard()
 
-	count, err := vulnDackBox.Reader.CountIn(vulnDackBox.Bucket, dackTxn)
+	count, err := Reader.CountIn(Bucket, dackTxn)
 	if err != nil {
 		return 0, err
 	}
@@ -73,7 +72,7 @@ func (b *storeImpl) Get(ctx context.Context, id string) (cve *storage.CVE, exist
 	}
 	defer dackTxn.Discard()
 
-	msg, err := vulnDackBox.Reader.ReadIn(vulnDackBox.BucketHandler.GetKey(id), dackTxn)
+	msg, err := Reader.ReadIn(BucketHandler.GetKey(id), dackTxn)
 	if err != nil || msg == nil {
 		return nil, false, err
 	}
@@ -93,7 +92,7 @@ func (b *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.CVE, 
 	msgs := make([]proto.Message, 0, len(ids))
 	missing := make([]int, 0, len(ids)/2)
 	for idx, id := range ids {
-		msg, err := vulnDackBox.Reader.ReadIn(vulnDackBox.BucketHandler.GetKey(id), dackTxn)
+		msg, err := Reader.ReadIn(BucketHandler.GetKey(id), dackTxn)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -117,7 +116,7 @@ func (b *storeImpl) Upsert(ctx context.Context, cves ...*storage.CVE) error {
 
 	keysToUpsert := make([][]byte, 0, len(cves))
 	for _, vuln := range cves {
-		keysToUpsert = append(keysToUpsert, vulnDackBox.KeyFunc(vuln))
+		keysToUpsert = append(keysToUpsert, KeyFunc(vuln))
 	}
 	lockedKeySet := concurrency.DiscreteKeySet(keysToUpsert...)
 
@@ -145,7 +144,7 @@ func (b *storeImpl) upsertNoBatch(cves ...*storage.CVE) error {
 	defer dackTxn.Discard()
 
 	for _, cve := range cves {
-		err := vulnDackBox.Upserter.UpsertIn(nil, cve, dackTxn)
+		err := Upserter.UpsertIn(nil, cve, dackTxn)
 		if err != nil {
 			return err
 		}
@@ -162,7 +161,7 @@ func (b *storeImpl) Delete(ctx context.Context, ids ...string) error {
 
 	keysToUpsert := make([][]byte, 0, len(ids))
 	for _, id := range ids {
-		keysToUpsert = append(keysToUpsert, vulnDackBox.BucketHandler.GetKey(id))
+		keysToUpsert = append(keysToUpsert, BucketHandler.GetKey(id))
 	}
 	lockedKeySet := concurrency.DiscreteKeySet(keysToUpsert...)
 
@@ -190,7 +189,7 @@ func (b *storeImpl) deleteNoBatch(ids ...string) error {
 	defer dackTxn.Discard()
 
 	for _, id := range ids {
-		if err := vulnDackBox.Deleter.DeleteIn(vulnDackBox.BucketHandler.GetKey(id), dackTxn); err != nil {
+		if err := Deleter.DeleteIn(BucketHandler.GetKey(id), dackTxn); err != nil {
 			return err
 		}
 	}
