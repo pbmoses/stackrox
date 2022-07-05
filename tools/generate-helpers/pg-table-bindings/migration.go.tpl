@@ -12,6 +12,8 @@ package n{{.Migration.MigrateSequence}}ton{{add .Migration.MigrateSequence 1}}
 {{- end }}
 {{- $name := .TrimmedType|lowerCamelCase }}
 {{ $rocksDB := eq .Migration.MigrateFromDB "rocksdb" }}
+{{ $boltDB := eq .Migration.MigrateFromDB "boltdb" }}
+{{ $dackbox := eq .Migration.MigrateFromDB "dackbox" }}
 
 import (
 	"context"
@@ -31,6 +33,7 @@ import (
 	"github.com/stackrox/rox/pkg/sac"
 	bolt "go.etcd.io/bbolt"
 	"gorm.io/gorm"
+	{{if $dackbox}}rawDackbox "github.com/stackrox/rox/pkg/dackbox/raw"{{end}}
 )
 
 var (
@@ -39,12 +42,16 @@ var (
 		VersionAfter:   storage.Version{SeqNum: int32(pkgMigrations.CurrentDBVersionSeqNum()) + {{add .Migration.MigrateSequence 1}}},
 		Run: func(databases *types.Databases) error {
 		    {{- if $rocksDB}}
-		    legacyStore, err := legacy.New(databases.{{if $rocksDB}}PkgRocksDB{{else}}BoltDB{{end}})
+		    legacyStore, err := legacy.New(databases.PkgRocksDB)
 		    if err != nil {
 		        return err
 		    }
-		    {{- else}}
+		    {{- end}}
+		    {{- if $boltDB}}
 		    legacyStore := legacy.New(databases.{{if $rocksDB}}PkgRocksDB{{else}}BoltDB{{end}})
+		    {{- end}}
+		    {{- if $dackbox}}
+		    legacyStore := dackbox.New(rawDackbox.GetGlobalDackBox(), rawDackbox.GetKeyFence())
 		    {{- end}}
 			if err := move({{if $rocksDB}}databases.PkgRocksDB{{else}}databases.BoltDB{{- end}}, databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
 				return errors.Wrap(err,
