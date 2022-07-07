@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -27,7 +28,7 @@ import (
 )
 
 const (
-	baseTable = "image_cves"
+	baseTable = "compliance_domains"
 
 	batchAfter = 100
 
@@ -41,22 +42,22 @@ const (
 
 var (
 	log            = logging.LoggerForModule()
-	schema         = pkgSchema.ImageCvesSchema
+	schema         = pkgSchema.ComplianceDomainsSchema
 	targetResource = permissions.ResourceMetadata{}
 )
 
 type Store interface {
 	Count(ctx context.Context) (int, error)
 	Exists(ctx context.Context, id string) (bool, error)
-	Get(ctx context.Context, id string) (*storage.ImageCVE, bool, error)
-	Upsert(ctx context.Context, obj *storage.ImageCVE) error
-	UpsertMany(ctx context.Context, objs []*storage.ImageCVE) error
+	Get(ctx context.Context, id string) (*storage.ComplianceDomain, bool, error)
+	Upsert(ctx context.Context, obj *storage.ComplianceDomain) error
+	UpsertMany(ctx context.Context, objs []*storage.ComplianceDomain) error
 	Delete(ctx context.Context, id string) error
 	GetIDs(ctx context.Context) ([]string, error)
-	GetMany(ctx context.Context, ids []string) ([]*storage.ImageCVE, []int, error)
+	GetMany(ctx context.Context, ids []string) ([]*storage.ComplianceDomain, []int, error)
 	DeleteMany(ctx context.Context, ids []string) error
 
-	Walk(ctx context.Context, fn func(obj *storage.ImageCVE) error) error
+	Walk(ctx context.Context, fn func(obj *storage.ComplianceDomain) error) error
 
 	AckKeysIndexed(ctx context.Context, keys ...string) error
 	GetKeysToIndex(ctx context.Context) ([]string, error)
@@ -74,7 +75,7 @@ func New(db *pgxpool.Pool) Store {
 	}
 }
 
-func insertIntoImageCves(ctx context.Context, batch *pgx.Batch, obj *storage.ImageCVE) error {
+func insertIntoComplianceDomains(ctx context.Context, batch *pgx.Batch, obj *storage.ComplianceDomain) error {
 
 	serialized, marshalErr := obj.Marshal()
 	if marshalErr != nil {
@@ -84,24 +85,19 @@ func insertIntoImageCves(ctx context.Context, batch *pgx.Batch, obj *storage.Ima
 	values := []interface{}{
 		// parent primary keys start
 		obj.GetId(),
-		obj.GetCveBaseInfo().GetCve(),
-		pgutils.NilOrTime(obj.GetCveBaseInfo().GetPublishedOn()),
-		pgutils.NilOrTime(obj.GetCveBaseInfo().GetCreatedAt()),
-		obj.GetCvss(),
-		obj.GetSeverity(),
-		obj.GetImpactScore(),
-		obj.GetSnoozed(),
-		pgutils.NilOrTime(obj.GetSnoozeExpiry()),
+		obj.GetCluster().GetId(),
+		obj.GetCluster().GetName(),
+		obj.GetCluster().GetLabels(),
 		serialized,
 	}
 
-	finalStr := "INSERT INTO image_cves (Id, CveBaseInfo_Cve, CveBaseInfo_PublishedOn, CveBaseInfo_CreatedAt, Cvss, Severity, ImpactScore, Snoozed, SnoozeExpiry, serialized) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT(Id) DO UPDATE SET Id = EXCLUDED.Id, CveBaseInfo_Cve = EXCLUDED.CveBaseInfo_Cve, CveBaseInfo_PublishedOn = EXCLUDED.CveBaseInfo_PublishedOn, CveBaseInfo_CreatedAt = EXCLUDED.CveBaseInfo_CreatedAt, Cvss = EXCLUDED.Cvss, Severity = EXCLUDED.Severity, ImpactScore = EXCLUDED.ImpactScore, Snoozed = EXCLUDED.Snoozed, SnoozeExpiry = EXCLUDED.SnoozeExpiry, serialized = EXCLUDED.serialized"
+	finalStr := "INSERT INTO compliance_domains (Id, Cluster_Id, Cluster_Name, Cluster_Labels, serialized) VALUES($1, $2, $3, $4, $5) ON CONFLICT(Id) DO UPDATE SET Id = EXCLUDED.Id, Cluster_Id = EXCLUDED.Cluster_Id, Cluster_Name = EXCLUDED.Cluster_Name, Cluster_Labels = EXCLUDED.Cluster_Labels, serialized = EXCLUDED.serialized"
 	batch.Queue(finalStr, values...)
 
 	return nil
 }
 
-func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*storage.ImageCVE) error {
+func (s *storeImpl) copyFromComplianceDomains(ctx context.Context, tx pgx.Tx, objs ...*storage.ComplianceDomain) error {
 
 	inputRows := [][]interface{}{}
 
@@ -115,21 +111,11 @@ func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*s
 
 		"id",
 
-		"cvebaseinfo_cve",
+		"cluster_id",
 
-		"cvebaseinfo_publishedon",
+		"cluster_name",
 
-		"cvebaseinfo_createdat",
-
-		"cvss",
-
-		"severity",
-
-		"impactscore",
-
-		"snoozed",
-
-		"snoozeexpiry",
+		"cluster_labels",
 
 		"serialized",
 	}
@@ -147,21 +133,11 @@ func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*s
 
 			obj.GetId(),
 
-			obj.GetCveBaseInfo().GetCve(),
+			obj.GetCluster().GetId(),
 
-			pgutils.NilOrTime(obj.GetCveBaseInfo().GetPublishedOn()),
+			obj.GetCluster().GetName(),
 
-			pgutils.NilOrTime(obj.GetCveBaseInfo().GetCreatedAt()),
-
-			obj.GetCvss(),
-
-			obj.GetSeverity(),
-
-			obj.GetImpactScore(),
-
-			obj.GetSnoozed(),
-
-			pgutils.NilOrTime(obj.GetSnoozeExpiry()),
+			obj.GetCluster().GetLabels(),
 
 			serialized,
 		})
@@ -180,7 +156,7 @@ func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*s
 			// clear the inserts and vals for the next batch
 			deletes = nil
 
-			_, err = tx.CopyFrom(ctx, pgx.Identifier{"image_cves"}, copyCols, pgx.CopyFromRows(inputRows))
+			_, err = tx.CopyFrom(ctx, pgx.Identifier{"compliance_domains"}, copyCols, pgx.CopyFromRows(inputRows))
 
 			if err != nil {
 				return err
@@ -194,8 +170,8 @@ func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*s
 	return err
 }
 
-func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ImageCVE) error {
-	conn, release, err := s.acquireConn(ctx, ops.Get, "ImageCVE")
+func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ComplianceDomain) error {
+	conn, release, err := s.acquireConn(ctx, ops.Get, "ComplianceDomain")
 	if err != nil {
 		return err
 	}
@@ -206,7 +182,7 @@ func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ImageCVE) err
 		return err
 	}
 
-	if err := s.copyFromImageCves(ctx, tx, objs...); err != nil {
+	if err := s.copyFromComplianceDomains(ctx, tx, objs...); err != nil {
 		if err := tx.Rollback(ctx); err != nil {
 			return err
 		}
@@ -218,8 +194,8 @@ func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ImageCVE) err
 	return nil
 }
 
-func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ImageCVE) error {
-	conn, release, err := s.acquireConn(ctx, ops.Get, "ImageCVE")
+func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ComplianceDomain) error {
+	conn, release, err := s.acquireConn(ctx, ops.Get, "ComplianceDomain")
 	if err != nil {
 		return err
 	}
@@ -227,7 +203,7 @@ func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ImageCVE) error
 
 	for _, obj := range objs {
 		batch := &pgx.Batch{}
-		if err := insertIntoImageCves(ctx, batch, obj); err != nil {
+		if err := insertIntoComplianceDomains(ctx, batch, obj); err != nil {
 			return err
 		}
 		batchResults := conn.SendBatch(ctx, batch)
@@ -244,10 +220,11 @@ func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ImageCVE) error
 	return nil
 }
 
-func (s *storeImpl) Upsert(ctx context.Context, obj *storage.ImageCVE) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Upsert, "ImageCVE")
+func (s *storeImpl) Upsert(ctx context.Context, obj *storage.ComplianceDomain) error {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Upsert, "ComplianceDomain")
 
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
+	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource).
+		ClusterID(obj.GetCluster().GetId())
 	if ok, err := scopeChecker.Allowed(ctx); err != nil {
 		return err
 	} else if !ok {
@@ -257,14 +234,25 @@ func (s *storeImpl) Upsert(ctx context.Context, obj *storage.ImageCVE) error {
 	return s.upsert(ctx, obj)
 }
 
-func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.ImageCVE) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.UpdateMany, "ImageCVE")
+func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.ComplianceDomain) error {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.UpdateMany, "ComplianceDomain")
 
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
 	if ok, err := scopeChecker.Allowed(ctx); err != nil {
 		return err
 	} else if !ok {
-		return sac.ErrResourceAccessDenied
+		var deniedIds []string
+		for _, obj := range objs {
+			subScopeChecker := scopeChecker.ClusterID(obj.GetCluster().GetId())
+			if ok, err := subScopeChecker.Allowed(ctx); err != nil {
+				return err
+			} else if !ok {
+				deniedIds = append(deniedIds, obj.GetId())
+			}
+		}
+		if len(deniedIds) != 0 {
+			return errors.Wrapf(sac.ErrResourceAccessDenied, "modifying complianceDomains with IDs [%s] was denied", strings.Join(deniedIds, ", "))
+		}
 	}
 
 	// Lock since copyFrom requires a delete first before being executed.  If multiple processes are updating
@@ -282,7 +270,7 @@ func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.ImageCVE) er
 
 // Count returns the number of objects in the store
 func (s *storeImpl) Count(ctx context.Context) (int, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Count, "ImageCVE")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Count, "ComplianceDomain")
 
 	var sacQueryFilter *v1.Query
 
@@ -291,7 +279,7 @@ func (s *storeImpl) Count(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	sacQueryFilter, err = sac.BuildClusterNamespaceLevelSACQueryFilter(scopeTree)
+	sacQueryFilter, err = sac.BuildClusterLevelSACQueryFilter(scopeTree)
 
 	if err != nil {
 		return 0, err
@@ -302,7 +290,7 @@ func (s *storeImpl) Count(ctx context.Context) (int, error) {
 
 // Exists returns if the id exists in the store
 func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Exists, "ImageCVE")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Exists, "ComplianceDomain")
 
 	var sacQueryFilter *v1.Query
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
@@ -310,7 +298,7 @@ func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	sacQueryFilter, err = sac.BuildClusterNamespaceLevelSACQueryFilter(scopeTree)
+	sacQueryFilter, err = sac.BuildClusterLevelSACQueryFilter(scopeTree)
 	if err != nil {
 		return false, err
 	}
@@ -325,8 +313,8 @@ func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
 }
 
 // Get returns the object, if it exists from the store
-func (s *storeImpl) Get(ctx context.Context, id string) (*storage.ImageCVE, bool, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "ImageCVE")
+func (s *storeImpl) Get(ctx context.Context, id string) (*storage.ComplianceDomain, bool, error) {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "ComplianceDomain")
 
 	var sacQueryFilter *v1.Query
 
@@ -335,7 +323,7 @@ func (s *storeImpl) Get(ctx context.Context, id string) (*storage.ImageCVE, bool
 	if err != nil {
 		return nil, false, err
 	}
-	sacQueryFilter, err = sac.BuildClusterNamespaceLevelSACQueryFilter(scopeTree)
+	sacQueryFilter, err = sac.BuildClusterLevelSACQueryFilter(scopeTree)
 	if err != nil {
 		return nil, false, err
 	}
@@ -350,7 +338,7 @@ func (s *storeImpl) Get(ctx context.Context, id string) (*storage.ImageCVE, bool
 		return nil, false, pgutils.ErrNilIfNoRows(err)
 	}
 
-	var msg storage.ImageCVE
+	var msg storage.ComplianceDomain
 	if err := proto.Unmarshal(data, &msg); err != nil {
 		return nil, false, err
 	}
@@ -368,7 +356,7 @@ func (s *storeImpl) acquireConn(ctx context.Context, op ops.Op, typ string) (*pg
 
 // Delete removes the specified ID from the store
 func (s *storeImpl) Delete(ctx context.Context, id string) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "ImageCVE")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "ComplianceDomain")
 
 	var sacQueryFilter *v1.Query
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
@@ -376,7 +364,7 @@ func (s *storeImpl) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	sacQueryFilter, err = sac.BuildClusterNamespaceLevelSACQueryFilter(scopeTree)
+	sacQueryFilter, err = sac.BuildClusterLevelSACQueryFilter(scopeTree)
 	if err != nil {
 		return err
 	}
@@ -391,7 +379,7 @@ func (s *storeImpl) Delete(ctx context.Context, id string) error {
 
 // GetIDs returns all the IDs for the store
 func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetAll, "storage.ImageCVEIDs")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetAll, "storage.ComplianceDomainIDs")
 	var sacQueryFilter *v1.Query
 
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
@@ -399,7 +387,7 @@ func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	sacQueryFilter, err = sac.BuildClusterNamespaceLevelSACQueryFilter(scopeTree)
+	sacQueryFilter, err = sac.BuildClusterLevelSACQueryFilter(scopeTree)
 	if err != nil {
 		return nil, err
 	}
@@ -417,8 +405,8 @@ func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
 }
 
 // GetMany returns the objects specified by the IDs or the index in the missing indices slice
-func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.ImageCVE, []int, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetMany, "ImageCVE")
+func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.ComplianceDomain, []int, error) {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetMany, "ComplianceDomain")
 
 	if len(ids) == 0 {
 		return nil, nil, nil
@@ -434,7 +422,7 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.Image
 	if err != nil {
 		return nil, nil, err
 	}
-	sacQueryFilter, err = sac.BuildClusterNamespaceLevelSACQueryFilter(scopeTree)
+	sacQueryFilter, err = sac.BuildClusterLevelSACQueryFilter(scopeTree)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -454,9 +442,9 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.Image
 		}
 		return nil, nil, err
 	}
-	resultsByID := make(map[string]*storage.ImageCVE)
+	resultsByID := make(map[string]*storage.ComplianceDomain)
 	for _, data := range rows {
-		msg := &storage.ImageCVE{}
+		msg := &storage.ComplianceDomain{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return nil, nil, err
 		}
@@ -465,7 +453,7 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.Image
 	missingIndices := make([]int, 0, len(ids)-len(resultsByID))
 	// It is important that the elems are populated in the same order as the input ids
 	// slice, since some calling code relies on that to maintain order.
-	elems := make([]*storage.ImageCVE, 0, len(resultsByID))
+	elems := make([]*storage.ComplianceDomain, 0, len(resultsByID))
 	for i, id := range ids {
 		if result, ok := resultsByID[id]; !ok {
 			missingIndices = append(missingIndices, i)
@@ -478,7 +466,7 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.Image
 
 // Delete removes the specified IDs from the store
 func (s *storeImpl) DeleteMany(ctx context.Context, ids []string) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.RemoveMany, "ImageCVE")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.RemoveMany, "ComplianceDomain")
 
 	var sacQueryFilter *v1.Query
 
@@ -487,7 +475,7 @@ func (s *storeImpl) DeleteMany(ctx context.Context, ids []string) error {
 	if err != nil {
 		return err
 	}
-	sacQueryFilter, err = sac.BuildClusterNamespaceLevelSACQueryFilter(scopeTree)
+	sacQueryFilter, err = sac.BuildClusterLevelSACQueryFilter(scopeTree)
 	if err != nil {
 		return err
 	}
@@ -501,8 +489,20 @@ func (s *storeImpl) DeleteMany(ctx context.Context, ids []string) error {
 }
 
 // Walk iterates over all of the objects in the store and applies the closure
-func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ImageCVE) error) error {
+func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ComplianceDomain) error) error {
 	var sacQueryFilter *v1.Query
+	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
+	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.ResourceWithAccess{
+		Resource: targetResource,
+		Access:   storage.Access_READ_ACCESS,
+	})
+	if err != nil {
+		return err
+	}
+	sacQueryFilter, err = sac.BuildClusterLevelSACQueryFilter(scopeTree)
+	if err != nil {
+		return err
+	}
 	fetcher, closer, err := postgres.RunCursorQueryForSchema(ctx, schema, sacQueryFilter, s.db)
 	if err != nil {
 		return err
@@ -514,7 +514,7 @@ func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ImageCVE) err
 			return pgutils.ErrNilIfNoRows(err)
 		}
 		for _, data := range rows {
-			var msg storage.ImageCVE
+			var msg storage.ComplianceDomain
 			if err := proto.Unmarshal(data, &msg); err != nil {
 				return err
 			}
@@ -531,13 +531,13 @@ func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ImageCVE) err
 
 //// Used for testing
 
-func dropTableImageCves(ctx context.Context, db *pgxpool.Pool) {
-	_, _ = db.Exec(ctx, "DROP TABLE IF EXISTS image_cves CASCADE")
+func dropTableComplianceDomains(ctx context.Context, db *pgxpool.Pool) {
+	_, _ = db.Exec(ctx, "DROP TABLE IF EXISTS compliance_domains CASCADE")
 
 }
 
 func Destroy(ctx context.Context, db *pgxpool.Pool) {
-	dropTableImageCves(ctx, db)
+	dropTableComplianceDomains(ctx, db)
 }
 
 // CreateTableAndNewStore returns a new Store instance for testing
