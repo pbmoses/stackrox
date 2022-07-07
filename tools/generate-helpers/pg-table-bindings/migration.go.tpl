@@ -73,7 +73,7 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
 	store := pgStore.New({{if .Migration.SingletonStore}}ctx, {{end}}postgresDB)
 	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
 	{{- if .Migration.SingletonStore}}
-    	config, found, err := legacyStore.Get(ctx)
+    	obj, found, err := legacyStore.Get(ctx)
     	if err != nil {
             log.WriteToStderr("failed to fetch {{$name}}")
             return err
@@ -81,8 +81,8 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
         if !found {
             return nil
         }
-        if err = store.Upsert(ctx, config); err != nil {
-        log.WriteToStderrf("failed to persist configs to store %v", err)
+        if err = store.Upsert(ctx, obj); err != nil {
+        log.WriteToStderrf("failed to persist object to store %v", err)
             return err
         }
     {{- else}}
@@ -117,7 +117,7 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
 	return nil
 }
 
-{{if not .Migration.SingletonStore}}
+{{if not (or .Migration.SingletonStore (not $rocksDB)  .GetAll) }}
 func walk(ctx context.Context, s legacy.Store, fn func(obj *{{.Type}}) error) error {
     {{- if $dackbox}}
 	return store_walk(ctx, s, fn)

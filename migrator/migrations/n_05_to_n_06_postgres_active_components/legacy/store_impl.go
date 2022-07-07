@@ -1,11 +1,11 @@
-package dackbox
+package legacy
 
 import (
 	"context"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/stackrox/rox/central/activecomponent/datastore/internal/store"
+	acDackBox "github.com/stackrox/rox/central/activecomponent/dackbox"
 	deploymentDackBox "github.com/stackrox/rox/central/deployment/dackbox"
 	componentDackBox "github.com/stackrox/rox/central/imagecomponent/dackbox"
 	"github.com/stackrox/rox/central/metrics"
@@ -31,13 +31,13 @@ type storeImpl struct {
 }
 
 // New returns a new Store instance.
-func New(dacky *dackbox.DackBox, keyFence concurrency.KeyFence) store.Store {
+func New(dacky *dackbox.DackBox, keyFence concurrency.KeyFence) Store {
 	return &storeImpl{
 		dacky:    dacky,
 		keyFence: keyFence,
-		reader:   Reader,
-		upserter: Upserter,
-		deleter:  Deleter,
+		reader:   acDackBox.Reader,
+		upserter: acDackBox.Upserter,
+		deleter:  acDackBox.Deleter,
 	}
 }
 
@@ -48,7 +48,7 @@ func (s *storeImpl) Exists(_ context.Context, id string) (bool, error) {
 	}
 	defer dackTxn.Discard()
 
-	exists, err := s.reader.ExistsIn(BucketHandler.GetKey(id), dackTxn)
+	exists, err := s.reader.ExistsIn(acDackBox.BucketHandler.GetKey(id), dackTxn)
 	if err != nil {
 		return false, err
 	}
@@ -65,7 +65,7 @@ func (s *storeImpl) Get(_ context.Context, id string) (*storage.ActiveComponent,
 	}
 	defer dackTxn.Discard()
 
-	msg, err := s.reader.ReadIn(BucketHandler.GetKey(id), dackTxn)
+	msg, err := s.reader.ReadIn(acDackBox.BucketHandler.GetKey(id), dackTxn)
 	if err != nil || msg == nil {
 		return nil, false, err
 	}
@@ -85,7 +85,7 @@ func (s *storeImpl) GetMany(_ context.Context, ids []string) ([]*storage.ActiveC
 	msgs := make([]proto.Message, 0, len(ids))
 	var missing []int
 	for idx, id := range ids {
-		msg, err := s.reader.ReadIn(BucketHandler.GetKey(id), dackTxn)
+		msg, err := s.reader.ReadIn(acDackBox.BucketHandler.GetKey(id), dackTxn)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -102,6 +102,21 @@ func (s *storeImpl) GetMany(_ context.Context, ids []string) ([]*storage.ActiveC
 	}
 
 	return ret, missing, nil
+}
+
+func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
+	txn, err := s.dacky.NewReadOnlyTransaction()
+	if err != nil {
+		return nil, err
+	}
+	defer txn.Discard()
+
+	var ids []string
+	err = txn.BucketKeyForEach(acDackBox.Bucket, true, func(k []byte) error {
+		ids = append(ids, string(k))
+		return nil
+	})
+	return ids, err
 }
 
 func (s *storeImpl) UpsertMany(_ context.Context, updates []*storage.ActiveComponent) error {
@@ -136,7 +151,7 @@ func (s *storeImpl) upsertActiveComponents(acs []*storage.ActiveComponent) error
 			if err != nil {
 				return err
 			}
-			acKey := BucketHandler.GetKey(ac.GetId())
+			acKey := acDackBox.BucketHandler.GetKey(ac.GetId())
 			g.AddRefs(deploymentDackBox.BucketHandler.GetKey(ac.GetDeploymentId()), acKey)
 			g.AddRefs(acKey, componentDackBox.BucketHandler.GetKey(ac.GetComponentId()))
 		}
@@ -147,7 +162,7 @@ func (s *storeImpl) upsertActiveComponents(acs []*storage.ActiveComponent) error
 func (s *storeImpl) DeleteMany(_ context.Context, ids []string) error {
 	defer metrics.SetDackboxOperationDurationTime(time.Now(), ops.RemoveMany, "ActiveComponent")
 
-	keysToDelete := BucketHandler.GetKeys(ids...)
+	keysToDelete := acDackBox.BucketHandler.GetKeys(ids...)
 	keysToLock := concurrency.DiscreteKeySet(keysToDelete...)
 	return s.keyFence.DoStatusWithLock(keysToLock, func() error {
 		batch := batcher.New(len(keysToDelete), batchSize)
@@ -173,7 +188,7 @@ func (s *storeImpl) deleteNoBatch(keys ...[]byte) error {
 	defer dackTxn.Discard()
 
 	for _, key := range keys {
-		err := Deleter.DeleteIn(key, dackTxn)
+		err := acDackBox.Deleter.DeleteIn(key, dackTxn)
 		if err != nil {
 			return err
 		}
@@ -188,7 +203,7 @@ func gatherKeysForUpsert(acs []*storage.ActiveComponent) [][]byte {
 		allKeys = append(allKeys,
 			componentDackBox.BucketHandler.GetKey(ac.GetComponentId()),
 			deploymentDackBox.BucketHandler.GetKey(ac.GetDeploymentId()),
-			BucketHandler.GetKey(ac.GetId()),
+			acDackBox.BucketHandler.GetKey(ac.GetId()),
 		)
 	}
 	return allKeys

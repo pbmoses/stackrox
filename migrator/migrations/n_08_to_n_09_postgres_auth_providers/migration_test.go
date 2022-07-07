@@ -11,10 +11,11 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	legacy "github.com/stackrox/rox/migrator/migrations/n_08_to_n_09_postgres_auth_providers/legacy"
 	"github.com/stackrox/rox/pkg/bolthelper"
+	"github.com/stackrox/rox/pkg/sac"
+
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/postgres"
 	"github.com/stackrox/rox/pkg/testutils"
@@ -83,7 +84,7 @@ func (s *postgresMigrationSuite) TestMigration() {
 		authProviders = append(authProviders, authProvider)
 		s.NoError(legacyStore.Upsert(s.ctx, authProvider))
 	}
-	s.NoError(move(s.legacyDB, s.gormDB, s.pool, legacyStore))
+	s.NoError(move(s.gormDB, s.pool, legacyStore))
 	var count int64
 	s.gormDB.Model(pkgSchema.CreateTableAuthProvidersStmt.GormModel).Count(&count)
 	s.Equal(int64(len(authProviders)), count)

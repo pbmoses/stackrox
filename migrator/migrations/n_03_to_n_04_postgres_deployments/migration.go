@@ -63,10 +63,6 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
 	return nil
 }
 
-func walk(ctx context.Context, s legacy.Store, fn func(obj *storage.Deployment) error) error {
-	return store_walk(ctx, s, fn)
-}
-
 func store_walk(ctx context.Context, s legacy.Store, fn func(obj *storage.Deployment) error) error {
 	ids, err := s.GetIDs(ctx)
 	if err != nil {
