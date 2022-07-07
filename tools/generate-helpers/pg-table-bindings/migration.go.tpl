@@ -117,7 +117,7 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
 	return nil
 }
 
-{{if not (or .Migration.SingletonStore (not $rocksDB)  .GetAll) }}
+{{if not (or .Migration.SingletonStore $boltDB .GetAll) }}
 func walk(ctx context.Context, s legacy.Store, fn func(obj *{{.Type}}) error) error {
     {{- if $dackbox}}
 	return store_walk(ctx, s, fn)
