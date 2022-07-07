@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stackrox/rox/generated/storage"
 	legacy "github.com/stackrox/rox/migrator/migrations/n_01_to_n_02_postgres_clusters/legacy"
+
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
@@ -88,7 +89,7 @@ func (s *postgresMigrationSuite) TestMigration() {
 		clusters = append(clusters, cluster)
 	}
 	s.NoError(legacyStore.UpsertMany(s.ctx, clusters))
-	s.NoError(move(s.legacyDB, s.gormDB, s.pool, legacyStore))
+	s.NoError(move(s.gormDB, s.pool, legacyStore))
 	var count int64
 	s.gormDB.Model(pkgSchema.CreateTableClustersStmt.GormModel).Count(&count)
 	s.Equal(int64(len(clusters)), count)

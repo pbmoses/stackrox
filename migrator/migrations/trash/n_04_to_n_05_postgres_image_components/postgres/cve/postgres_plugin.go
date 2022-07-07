@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	baseTable = "image_components"
+	baseTable = "image_cves"
 
 	batchAfter = 100
 
@@ -41,22 +41,22 @@ const (
 
 var (
 	log            = logging.LoggerForModule()
-	schema         = pkgSchema.ImageComponentsSchema
+	schema         = pkgSchema.ImageCvesSchema
 	targetResource = permissions.ResourceMetadata{}
 )
 
 type Store interface {
 	Count(ctx context.Context) (int, error)
 	Exists(ctx context.Context, id string) (bool, error)
-	Get(ctx context.Context, id string) (*storage.ImageComponent, bool, error)
-	Upsert(ctx context.Context, obj *storage.ImageComponent) error
-	UpsertMany(ctx context.Context, objs []*storage.ImageComponent) error
+	Get(ctx context.Context, id string) (*storage.ImageCVE, bool, error)
+	Upsert(ctx context.Context, obj *storage.ImageCVE) error
+	UpsertMany(ctx context.Context, objs []*storage.ImageCVE) error
 	Delete(ctx context.Context, id string) error
 	GetIDs(ctx context.Context) ([]string, error)
-	GetMany(ctx context.Context, ids []string) ([]*storage.ImageComponent, []int, error)
+	GetMany(ctx context.Context, ids []string) ([]*storage.ImageCVE, []int, error)
 	DeleteMany(ctx context.Context, ids []string) error
 
-	Walk(ctx context.Context, fn func(obj *storage.ImageComponent) error) error
+	Walk(ctx context.Context, fn func(obj *storage.ImageCVE) error) error
 
 	AckKeysIndexed(ctx context.Context, keys ...string) error
 	GetKeysToIndex(ctx context.Context) ([]string, error)
@@ -74,7 +74,7 @@ func New(db *pgxpool.Pool) Store {
 	}
 }
 
-func insertIntoImageComponents(ctx context.Context, batch *pgx.Batch, obj *storage.ImageComponent) error {
+func insertIntoImageCves(ctx context.Context, batch *pgx.Batch, obj *storage.ImageCVE) error {
 
 	serialized, marshalErr := obj.Marshal()
 	if marshalErr != nil {
@@ -84,21 +84,24 @@ func insertIntoImageComponents(ctx context.Context, batch *pgx.Batch, obj *stora
 	values := []interface{}{
 		// parent primary keys start
 		obj.GetId(),
-		obj.GetName(),
-		obj.GetVersion(),
-		obj.GetSource(),
-		obj.GetRiskScore(),
-		obj.GetTopCvss(),
+		obj.GetCveBaseInfo().GetCve(),
+		pgutils.NilOrTime(obj.GetCveBaseInfo().GetPublishedOn()),
+		pgutils.NilOrTime(obj.GetCveBaseInfo().GetCreatedAt()),
+		obj.GetCvss(),
+		obj.GetSeverity(),
+		obj.GetImpactScore(),
+		obj.GetSnoozed(),
+		pgutils.NilOrTime(obj.GetSnoozeExpiry()),
 		serialized,
 	}
 
-	finalStr := "INSERT INTO image_components (Id, Name, Version, Source, RiskScore, TopCvss, serialized) VALUES($1, $2, $3, $4, $5, $6, $7) ON CONFLICT(Id) DO UPDATE SET Id = EXCLUDED.Id, Name = EXCLUDED.Name, Version = EXCLUDED.Version, Source = EXCLUDED.Source, RiskScore = EXCLUDED.RiskScore, TopCvss = EXCLUDED.TopCvss, serialized = EXCLUDED.serialized"
+	finalStr := "INSERT INTO image_cves (Id, CveBaseInfo_Cve, CveBaseInfo_PublishedOn, CveBaseInfo_CreatedAt, Cvss, Severity, ImpactScore, Snoozed, SnoozeExpiry, serialized) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT(Id) DO UPDATE SET Id = EXCLUDED.Id, CveBaseInfo_Cve = EXCLUDED.CveBaseInfo_Cve, CveBaseInfo_PublishedOn = EXCLUDED.CveBaseInfo_PublishedOn, CveBaseInfo_CreatedAt = EXCLUDED.CveBaseInfo_CreatedAt, Cvss = EXCLUDED.Cvss, Severity = EXCLUDED.Severity, ImpactScore = EXCLUDED.ImpactScore, Snoozed = EXCLUDED.Snoozed, SnoozeExpiry = EXCLUDED.SnoozeExpiry, serialized = EXCLUDED.serialized"
 	batch.Queue(finalStr, values...)
 
 	return nil
 }
 
-func (s *storeImpl) copyFromImageComponents(ctx context.Context, tx pgx.Tx, objs ...*storage.ImageComponent) error {
+func (s *storeImpl) copyFromImageCves(ctx context.Context, tx pgx.Tx, objs ...*storage.ImageCVE) error {
 
 	inputRows := [][]interface{}{}
 
@@ -112,15 +115,21 @@ func (s *storeImpl) copyFromImageComponents(ctx context.Context, tx pgx.Tx, objs
 
 		"id",
 
-		"name",
+		"cvebaseinfo_cve",
 
-		"version",
+		"cvebaseinfo_publishedon",
 
-		"source",
+		"cvebaseinfo_createdat",
 
-		"riskscore",
+		"cvss",
 
-		"topcvss",
+		"severity",
+
+		"impactscore",
+
+		"snoozed",
+
+		"snoozeexpiry",
 
 		"serialized",
 	}
@@ -138,15 +147,21 @@ func (s *storeImpl) copyFromImageComponents(ctx context.Context, tx pgx.Tx, objs
 
 			obj.GetId(),
 
-			obj.GetName(),
+			obj.GetCveBaseInfo().GetCve(),
 
-			obj.GetVersion(),
+			pgutils.NilOrTime(obj.GetCveBaseInfo().GetPublishedOn()),
 
-			obj.GetSource(),
+			pgutils.NilOrTime(obj.GetCveBaseInfo().GetCreatedAt()),
 
-			obj.GetRiskScore(),
+			obj.GetCvss(),
 
-			obj.GetTopCvss(),
+			obj.GetSeverity(),
+
+			obj.GetImpactScore(),
+
+			obj.GetSnoozed(),
+
+			pgutils.NilOrTime(obj.GetSnoozeExpiry()),
 
 			serialized,
 		})
@@ -165,7 +180,7 @@ func (s *storeImpl) copyFromImageComponents(ctx context.Context, tx pgx.Tx, objs
 			// clear the inserts and vals for the next batch
 			deletes = nil
 
-			_, err = tx.CopyFrom(ctx, pgx.Identifier{"image_components"}, copyCols, pgx.CopyFromRows(inputRows))
+			_, err = tx.CopyFrom(ctx, pgx.Identifier{"image_cves"}, copyCols, pgx.CopyFromRows(inputRows))
 
 			if err != nil {
 				return err
@@ -179,8 +194,8 @@ func (s *storeImpl) copyFromImageComponents(ctx context.Context, tx pgx.Tx, objs
 	return err
 }
 
-func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ImageComponent) error {
-	conn, release, err := s.acquireConn(ctx, ops.Get, "ImageComponent")
+func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ImageCVE) error {
+	conn, release, err := s.acquireConn(ctx, ops.Get, "ImageCVE")
 	if err != nil {
 		return err
 	}
@@ -191,7 +206,7 @@ func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ImageComponen
 		return err
 	}
 
-	if err := s.copyFromImageComponents(ctx, tx, objs...); err != nil {
+	if err := s.copyFromImageCves(ctx, tx, objs...); err != nil {
 		if err := tx.Rollback(ctx); err != nil {
 			return err
 		}
@@ -203,8 +218,8 @@ func (s *storeImpl) copyFrom(ctx context.Context, objs ...*storage.ImageComponen
 	return nil
 }
 
-func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ImageComponent) error {
-	conn, release, err := s.acquireConn(ctx, ops.Get, "ImageComponent")
+func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ImageCVE) error {
+	conn, release, err := s.acquireConn(ctx, ops.Get, "ImageCVE")
 	if err != nil {
 		return err
 	}
@@ -212,7 +227,7 @@ func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ImageComponent)
 
 	for _, obj := range objs {
 		batch := &pgx.Batch{}
-		if err := insertIntoImageComponents(ctx, batch, obj); err != nil {
+		if err := insertIntoImageCves(ctx, batch, obj); err != nil {
 			return err
 		}
 		batchResults := conn.SendBatch(ctx, batch)
@@ -229,8 +244,8 @@ func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.ImageComponent)
 	return nil
 }
 
-func (s *storeImpl) Upsert(ctx context.Context, obj *storage.ImageComponent) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Upsert, "ImageComponent")
+func (s *storeImpl) Upsert(ctx context.Context, obj *storage.ImageCVE) error {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Upsert, "ImageCVE")
 
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
 	if ok, err := scopeChecker.Allowed(ctx); err != nil {
@@ -242,8 +257,8 @@ func (s *storeImpl) Upsert(ctx context.Context, obj *storage.ImageComponent) err
 	return s.upsert(ctx, obj)
 }
 
-func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.ImageComponent) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.UpdateMany, "ImageComponent")
+func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.ImageCVE) error {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.UpdateMany, "ImageCVE")
 
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
 	if ok, err := scopeChecker.Allowed(ctx); err != nil {
@@ -267,7 +282,7 @@ func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.ImageCompone
 
 // Count returns the number of objects in the store
 func (s *storeImpl) Count(ctx context.Context) (int, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Count, "ImageComponent")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Count, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 
@@ -287,7 +302,7 @@ func (s *storeImpl) Count(ctx context.Context) (int, error) {
 
 // Exists returns if the id exists in the store
 func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Exists, "ImageComponent")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Exists, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
@@ -310,8 +325,8 @@ func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
 }
 
 // Get returns the object, if it exists from the store
-func (s *storeImpl) Get(ctx context.Context, id string) (*storage.ImageComponent, bool, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "ImageComponent")
+func (s *storeImpl) Get(ctx context.Context, id string) (*storage.ImageCVE, bool, error) {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 
@@ -335,7 +350,7 @@ func (s *storeImpl) Get(ctx context.Context, id string) (*storage.ImageComponent
 		return nil, false, pgutils.ErrNilIfNoRows(err)
 	}
 
-	var msg storage.ImageComponent
+	var msg storage.ImageCVE
 	if err := proto.Unmarshal(data, &msg); err != nil {
 		return nil, false, err
 	}
@@ -353,7 +368,7 @@ func (s *storeImpl) acquireConn(ctx context.Context, op ops.Op, typ string) (*pg
 
 // Delete removes the specified ID from the store
 func (s *storeImpl) Delete(ctx context.Context, id string) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "ImageComponent")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
@@ -376,7 +391,7 @@ func (s *storeImpl) Delete(ctx context.Context, id string) error {
 
 // GetIDs returns all the IDs for the store
 func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetAll, "storage.ImageComponentIDs")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetAll, "storage.ImageCVEIDs")
 	var sacQueryFilter *v1.Query
 
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
@@ -402,8 +417,8 @@ func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
 }
 
 // GetMany returns the objects specified by the IDs or the index in the missing indices slice
-func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.ImageComponent, []int, error) {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetMany, "ImageComponent")
+func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.ImageCVE, []int, error) {
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetMany, "ImageCVE")
 
 	if len(ids) == 0 {
 		return nil, nil, nil
@@ -439,9 +454,9 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.Image
 		}
 		return nil, nil, err
 	}
-	resultsByID := make(map[string]*storage.ImageComponent)
+	resultsByID := make(map[string]*storage.ImageCVE)
 	for _, data := range rows {
-		msg := &storage.ImageComponent{}
+		msg := &storage.ImageCVE{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return nil, nil, err
 		}
@@ -450,7 +465,7 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.Image
 	missingIndices := make([]int, 0, len(ids)-len(resultsByID))
 	// It is important that the elems are populated in the same order as the input ids
 	// slice, since some calling code relies on that to maintain order.
-	elems := make([]*storage.ImageComponent, 0, len(resultsByID))
+	elems := make([]*storage.ImageCVE, 0, len(resultsByID))
 	for i, id := range ids {
 		if result, ok := resultsByID[id]; !ok {
 			missingIndices = append(missingIndices, i)
@@ -463,7 +478,7 @@ func (s *storeImpl) GetMany(ctx context.Context, ids []string) ([]*storage.Image
 
 // Delete removes the specified IDs from the store
 func (s *storeImpl) DeleteMany(ctx context.Context, ids []string) error {
-	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.RemoveMany, "ImageComponent")
+	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.RemoveMany, "ImageCVE")
 
 	var sacQueryFilter *v1.Query
 
@@ -486,7 +501,7 @@ func (s *storeImpl) DeleteMany(ctx context.Context, ids []string) error {
 }
 
 // Walk iterates over all of the objects in the store and applies the closure
-func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ImageComponent) error) error {
+func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ImageCVE) error) error {
 	var sacQueryFilter *v1.Query
 	fetcher, closer, err := postgres.RunCursorQueryForSchema(ctx, schema, sacQueryFilter, s.db)
 	if err != nil {
@@ -499,7 +514,7 @@ func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ImageComponen
 			return pgutils.ErrNilIfNoRows(err)
 		}
 		for _, data := range rows {
-			var msg storage.ImageComponent
+			var msg storage.ImageCVE
 			if err := proto.Unmarshal(data, &msg); err != nil {
 				return err
 			}
@@ -516,13 +531,13 @@ func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.ImageComponen
 
 //// Used for testing
 
-func dropTableImageComponents(ctx context.Context, db *pgxpool.Pool) {
-	_, _ = db.Exec(ctx, "DROP TABLE IF EXISTS image_components CASCADE")
+func dropTableImageCves(ctx context.Context, db *pgxpool.Pool) {
+	_, _ = db.Exec(ctx, "DROP TABLE IF EXISTS image_cves CASCADE")
 
 }
 
 func Destroy(ctx context.Context, db *pgxpool.Pool) {
-	dropTableImageComponents(ctx, db)
+	dropTableImageCves(ctx, db)
 }
 
 // CreateTableAndNewStore returns a new Store instance for testing

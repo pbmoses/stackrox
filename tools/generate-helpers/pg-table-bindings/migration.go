@@ -3,7 +3,7 @@ package main
 import "regexp"
 
 var (
-	migrateFromRegex = regexp.MustCompile(`^(rocksdb|boltdb):\S+$`)
+	migrateFromRegex = regexp.MustCompile(`^(rocksdb|boltdb|dackbox):\S+$`)
 )
 
 // MigrationOptions hold options to generate migrations

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stackrox/rox/generated/storage"
 	legacy "github.com/stackrox/rox/migrator/migrations/n_06_to_n_07_postgres_alerts/legacy"
+
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
@@ -88,7 +89,7 @@ func (s *postgresMigrationSuite) TestMigration() {
 		alerts = append(alerts, alert)
 	}
 	s.NoError(legacyStore.UpsertMany(s.ctx, alerts))
-	s.NoError(move(s.legacyDB, s.gormDB, s.pool, legacyStore))
+	s.NoError(move(s.gormDB, s.pool, legacyStore))
 	var count int64
 	s.gormDB.Model(pkgSchema.CreateTableAlertsStmt.GormModel).Count(&count)
 	s.Equal(int64(len(alerts)), count)

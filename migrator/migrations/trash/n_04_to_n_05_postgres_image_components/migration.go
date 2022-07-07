@@ -12,9 +12,9 @@ import (
 	legacy "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_image_components/legacy"
 	pgStore "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_image_components/postgres"
 	"github.com/stackrox/rox/migrator/types"
+	rawDackbox "github.com/stackrox/rox/pkg/dackbox/raw"
 	pkgMigrations "github.com/stackrox/rox/pkg/migrations"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
-	"github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
 	"gorm.io/gorm"
 )
@@ -24,11 +24,8 @@ var (
 		StartingSeqNum: pkgMigrations.CurrentDBVersionSeqNum() + 4,
 		VersionAfter:   storage.Version{SeqNum: int32(pkgMigrations.CurrentDBVersionSeqNum()) + 5},
 		Run: func(databases *types.Databases) error {
-			legacyStore, err := legacy.New(databases.PkgRocksDB)
-			if err != nil {
-				return err
-			}
-			if err := move(databases.PkgRocksDB, databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
+			legacyStore := legacy.New(rawDackbox.GetGlobalDackBox(), rawDackbox.GetKeyFence())
+			if err := move(databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
 				return errors.Wrap(err,
 					"moving image_components from rocksdb to postgres")
 			}
@@ -40,15 +37,15 @@ var (
 	log       = loghelper.LogWrapper{}
 )
 
-func move(legacyDB *rocksdb.RocksDB, gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
+func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
 	ctx := sac.WithAllAccess(context.Background())
 	store := pgStore.New(postgresDB)
 	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
 	var imageComponents []*storage.ImageComponent
 	var err error
-	legacyStore.Walk(ctx, func(obj *storage.ImageComponent) error {
+	walk(ctx, legacyStore, func(obj *storage.ImageComponent) error {
 		imageComponents = append(imageComponents, obj)
-		if len(imageComponents) == 10*batchSize {
+		if len(imageComponents) == batchSize {
 			if err := store.UpsertMany(ctx, imageComponents); err != nil {
 				log.WriteToStderrf("failed to persist image_components to store %v", err)
 				return err
@@ -61,6 +58,35 @@ func move(legacyDB *rocksdb.RocksDB, gormDB *gorm.DB, postgresDB *pgxpool.Pool, 
 		if err = store.UpsertMany(ctx, imageComponents); err != nil {
 			log.WriteToStderrf("failed to persist image_components to store %v", err)
 			return err
+		}
+	}
+	return nil
+}
+
+func walk(ctx context.Context, s legacy.Store, fn func(obj *storage.ImageComponent) error) error {
+	return store_walk(ctx, s, fn)
+}
+
+func store_walk(ctx context.Context, s legacy.Store, fn func(obj *storage.ImageComponent) error) error {
+	ids, err := s.GetIDs(ctx)
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < len(ids); i += batchSize {
+		end := i + batchSize
+
+		if end > len(ids) {
+			end = len(ids)
+		}
+		objs, _, err := s.GetMany(ctx, ids[i:end])
+		if err != nil {
+			return err
+		}
+		for _, obj := range objs {
+			if err = fn(obj); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

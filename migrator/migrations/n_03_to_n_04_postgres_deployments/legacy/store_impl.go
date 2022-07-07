@@ -1,17 +1,17 @@
-package dackbox
+package legacy
 
 import (
 	"context"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	acDackBox "github.com/stackrox/rox/central/activecomponent/dackbox"
 	clusterDackBox "github.com/stackrox/rox/central/cluster/dackbox"
 	deploymentDackBox "github.com/stackrox/rox/central/deployment/dackbox"
 	imageDackBox "github.com/stackrox/rox/central/image/dackbox"
 	"github.com/stackrox/rox/central/metrics"
 	namespaceDackBox "github.com/stackrox/rox/central/namespace/dackbox"
 	"github.com/stackrox/rox/generated/storage"
+	acDackBox "github.com/stackrox/rox/migrator/migrations/dackboxhelpers/activecomponent"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/dackbox"
 	"github.com/stackrox/rox/pkg/dackbox/sortedkeys"
@@ -286,4 +286,13 @@ func convertDeploymentToListDeployment(d *storage.Deployment) *storage.ListDeplo
 		Created:   d.GetCreated(),
 		Priority:  d.GetPriority(),
 	}
+}
+
+func (b *StoreImpl) UpsertMany(ctx context.Context, objs []*storage.Deployment) error {
+	for _, obj := range objs {
+		if err := b.Upsert(ctx, obj); err != nil {
+			return err
+		}
+	}
+	return nil
 }

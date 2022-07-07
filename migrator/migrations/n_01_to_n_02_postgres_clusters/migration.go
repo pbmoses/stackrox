@@ -14,7 +14,6 @@ import (
 	"github.com/stackrox/rox/migrator/types"
 	pkgMigrations "github.com/stackrox/rox/pkg/migrations"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
-	"github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
 	"gorm.io/gorm"
 )
@@ -28,7 +27,7 @@ var (
 			if err != nil {
 				return err
 			}
-			if err := move(databases.PkgRocksDB, databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
+			if err := move(databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
 				return errors.Wrap(err,
 					"moving clusters from rocksdb to postgres")
 			}
@@ -40,15 +39,15 @@ var (
 	log       = loghelper.LogWrapper{}
 )
 
-func move(legacyDB *rocksdb.RocksDB, gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
+func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
 	ctx := sac.WithAllAccess(context.Background())
 	store := pgStore.New(postgresDB)
 	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
 	var clusters []*storage.Cluster
 	var err error
-	legacyStore.Walk(ctx, func(obj *storage.Cluster) error {
+	walk(ctx, legacyStore, func(obj *storage.Cluster) error {
 		clusters = append(clusters, obj)
-		if len(clusters) == 10*batchSize {
+		if len(clusters) == batchSize {
 			if err := store.UpsertMany(ctx, clusters); err != nil {
 				log.WriteToStderrf("failed to persist clusters to store %v", err)
 				return err
@@ -64,6 +63,10 @@ func move(legacyDB *rocksdb.RocksDB, gormDB *gorm.DB, postgresDB *pgxpool.Pool, 
 		}
 	}
 	return nil
+}
+
+func walk(ctx context.Context, s legacy.Store, fn func(obj *storage.Cluster) error) error {
+	return s.Walk(ctx, fn)
 }
 
 func init() {

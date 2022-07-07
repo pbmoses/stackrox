@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stackrox/rox/generated/storage"
 	legacy "github.com/stackrox/rox/migrator/migrations/n_04_to_n_05_postgres_image_components/legacy"
+	"github.com/stackrox/rox/pkg/concurrency"
+	"github.com/stackrox/rox/pkg/dackbox"
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
@@ -77,8 +79,9 @@ func (s *postgresMigrationSuite) TearDownTest() {
 func (s *postgresMigrationSuite) TestMigration() {
 	// Prepare data and write to legacy DB
 	var imageComponents []*storage.ImageComponent
-	legacyStore, err := legacy.New(s.legacyDB)
+	dacky, err := dackbox.NewRocksDBDackBox(s.legacyDB, nil, []byte("graph"), []byte("dirty"), []byte("valid"))
 	s.NoError(err)
+	legacyStore := legacy.New(dacky, concurrency.NewKeyFence())
 	batchSize = 48
 	rocksWriteBatch := gorocksdb.NewWriteBatch()
 	defer rocksWriteBatch.Destroy()
@@ -88,7 +91,7 @@ func (s *postgresMigrationSuite) TestMigration() {
 		imageComponents = append(imageComponents, imageComponent)
 	}
 	s.NoError(legacyStore.UpsertMany(s.ctx, imageComponents))
-	s.NoError(move(s.legacyDB, s.gormDB, s.pool, legacyStore))
+	s.NoError(move(s.gormDB, s.pool, legacyStore))
 	var count int64
 	s.gormDB.Model(pkgSchema.CreateTableImageComponentsStmt.GormModel).Count(&count)
 	s.Equal(int64(len(imageComponents)), count)

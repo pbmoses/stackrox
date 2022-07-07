@@ -11,9 +11,9 @@ package n{{.Migration.MigrateSequence}}ton{{add .Migration.MigrateSequence 1}}
 {{ $singlePK = .Schema.ID }}
 {{- end }}
 {{- $name := .TrimmedType|lowerCamelCase }}
-{{ $rocksDB := eq .Migration.MigrateFromDB "rocksdb" }}
 {{ $boltDB := eq .Migration.MigrateFromDB "boltdb" }}
 {{ $dackbox := eq .Migration.MigrateFromDB "dackbox" }}
+{{ $rocksDB := or $dackbox (eq .Migration.MigrateFromDB "rocksdb") }}
 
 import (
 	"context"
@@ -42,18 +42,19 @@ var (
 		VersionAfter:   storage.Version{SeqNum: int32(pkgMigrations.CurrentDBVersionSeqNum()) + {{add .Migration.MigrateSequence 1}}},
 		Run: func(databases *types.Databases) error {
 		    {{- if $rocksDB}}
-		    legacyStore, err := legacy.New(databases.PkgRocksDB)
-		    if err != nil {
-		        return err
-		    }
+		        {{- if $dackbox}}
+		        legacyStore := legacy.New(rawDackbox.GetGlobalDackBox(), rawDackbox.GetKeyFence())
+		        {{- else}}
+		        legacyStore, err := legacy.New(databases.PkgRocksDB)
+		        if err != nil {
+		            return err
+		        }
+		        {{- end}}
 		    {{- end}}
 		    {{- if $boltDB}}
-		    legacyStore := legacy.New(databases.{{if $rocksDB}}PkgRocksDB{{else}}BoltDB{{end}})
+		    legacyStore := legacy.New(databases.BoltDB)
 		    {{- end}}
-		    {{- if $dackbox}}
-		    legacyStore := dackbox.New(rawDackbox.GetGlobalDackBox(), rawDackbox.GetKeyFence())
-		    {{- end}}
-			if err := move({{if $rocksDB}}databases.PkgRocksDB{{else}}databases.BoltDB{{- end}}, databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
+			if err := move(databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
 				return errors.Wrap(err,
 					"moving {{.Table|lowerCase}} from rocksdb to postgres")
 			}
@@ -67,7 +68,7 @@ var (
 
 {{$rocksDB :=  eq .Migration.MigrateFromDB "rocksdb" }}
 
-func move(legacyDB {{if $rocksDB}}*rocksdb.RocksDB{{else}}*bolt.DB{{end}}, gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
+func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
 	ctx := sac.WithAllAccess(context.Background())
 	store := pgStore.New({{if .Migration.SingletonStore}}ctx, {{end}}postgresDB)
 	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
@@ -88,9 +89,9 @@ func move(legacyDB {{if $rocksDB}}*rocksdb.RocksDB{{else}}*bolt.DB{{end}}, gormD
 	    {{- if or $rocksDB (not .GetAll) }}
 	    var {{.Table|lowerCamelCase}} []*{{.Type}}
 	    var err error
-	    legacyStore.Walk(ctx, func(obj *{{.Type}}) error {
+	    walk(ctx, legacyStore, func(obj *{{.Type}}) error {
 		    {{.Table|lowerCamelCase}} = append({{.Table|lowerCamelCase}}, obj)
-		    if len({{.Table|lowerCamelCase}}) == 10*batchSize {
+		    if len({{.Table|lowerCamelCase}}) == batchSize {
 			    if err := store.UpsertMany(ctx, {{.Table|lowerCamelCase}}); err != nil {
 				    log.WriteToStderrf("failed to persist {{.Table|lowerCase}} to store %v", err)
 				    return err
@@ -115,6 +116,43 @@ func move(legacyDB {{if $rocksDB}}*rocksdb.RocksDB{{else}}*bolt.DB{{end}}, gormD
     {{- end}}
 	return nil
 }
+
+{{if not .Migration.SingletonStore}}
+func walk(ctx context.Context, s legacy.Store, fn func(obj *{{.Type}}) error) error {
+    {{- if $dackbox}}
+	return store_walk(ctx, s, fn)
+	{{- else}}
+	return s.Walk(ctx, fn)
+    {{- end}}
+}
+{{end}}
+
+{{if $dackbox}}
+func store_walk(ctx context.Context, s legacy.Store, fn func(obj *{{.Type}}) error) error {
+	ids, err := s.GetIDs(ctx)
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < len(ids); i += batchSize {
+		end := i + batchSize
+
+		if end > len(ids) {
+			end = len(ids)
+		}
+		objs, _, err := s.GetMany(ctx, ids[i:end])
+		if err != nil {
+			return err
+		}
+		for _, obj := range objs {
+			if err = fn(obj); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+{{end}}
 
 func init() {
 	migrations.MustRegisterMigration(migration)
