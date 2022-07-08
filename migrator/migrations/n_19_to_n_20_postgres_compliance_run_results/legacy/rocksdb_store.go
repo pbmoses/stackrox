@@ -21,7 +21,7 @@ var (
 
 	resultsBucketName = []byte("compliance-run-results")
 
-	metadataKey = dbhelper.GetBucketKey(resultsBucketName, []byte("metadata"))
+	resultsKey = dbhelper.GetBucketKey(resultsBucketName, []byte("results"))
 
 	log = logging.LoggerForModule()
 )
@@ -38,31 +38,7 @@ type rocksdbStore struct {
 }
 
 type keyMaker struct {
-	partialMetadataPrefix []byte
-}
-
-func getKeyMaker(clusterID, standardID string) *keyMaker {
-	metadataPrefix := getClusterStandardPrefixes(clusterID, standardID)
-
-	return &keyMaker{
-		partialMetadataPrefix: metadataPrefix,
-	}
-}
-
-func unmarshalMetadata(iterator *gorocksdb.Iterator) (*storage.ComplianceRunMetadata, error) {
-	bytes := iterator.Value().Data()
-	if len(bytes) == 0 {
-		return nil, errors.New("compliance domain data is empty")
-	}
-	var domain storage.ComplianceRunMetadata
-	if err := domain.Unmarshal(bytes); err != nil {
-		return nil, errors.Wrap(err, "unmarshalling compliance domain")
-	}
-	return &domain, nil
-}
-
-func (k *keyMaker) getMetadataIterationPrefix() []byte {
-	return k.partialMetadataPrefix
+	partialResultsPrefix []byte
 }
 
 func (k *keyMaker) getKeysForMetadata(metadata *storage.ComplianceRunMetadata) ([]byte, error) {
@@ -70,7 +46,6 @@ func (k *keyMaker) getKeysForMetadata(metadata *storage.ComplianceRunMetadata) (
 	if runID == "" {
 		return nil, errors.New("run has an empty ID")
 	}
-
 	tsBytes := []byte(fmt.Sprintf("%016X", timestamp.FromGoTime(time.Now())))
 	// Invert the bits of each byte of the timestamp in order to have the most recent timestamp first
 	for i, tsByte := range tsBytes {
@@ -79,60 +54,81 @@ func (k *keyMaker) getKeysForMetadata(metadata *storage.ComplianceRunMetadata) (
 	separatorAndRunID := []byte(fmt.Sprintf(":%s", runID))
 	tsAndRunIDPrefix := append(tsBytes, separatorAndRunID...)
 
-	key := append([]byte{}, k.partialMetadataPrefix...)
-	key = append(metadataKey, tsAndRunIDPrefix...)
+	resultsKey := append([]byte{}, k.partialResultsPrefix...)
+	resultsKey = append(resultsKey, tsAndRunIDPrefix...)
 
-	return key, nil
+	return resultsKey, nil
+}
+
+func getKeyMaker(clusterID, standardID string) *keyMaker {
+	resultsPrefix := getClusterStandardPrefixes(clusterID, standardID)
+
+	return &keyMaker{
+		partialResultsPrefix: resultsPrefix,
+	}
 }
 
 func getClusterStandardPrefixes(clusterID, standardID string) []byte {
 	// trailing colon is intentional, this prefix will always be followed by a timestamp and a run ID
 	partialPrefix := fmt.Sprintf("%s:%s:", clusterID, standardID)
-	metadataPrefix := getPrefix(string(metadataKey), partialPrefix)
-	return metadataPrefix
+	resultsPrefix := getPrefix(string(resultsKey), partialPrefix)
+	return resultsPrefix
 }
 
 func getPrefix(leftPrefix, rightPrefix string) []byte {
 	return []byte(leftPrefix + ":" + rightPrefix)
 }
 
-func (r *rocksdbStore) Walk(ctx context.Context, fn func(obj *storage.ComplianceRunMetadata) error) error {
+func unmarshalResults(iterator *gorocksdb.Iterator) (*storage.ComplianceRunResults, error) {
+	bytes := iterator.Value().Data()
+	if len(bytes) == 0 {
+		return nil, errors.New("results data empty")
+	}
+	var results storage.ComplianceRunResults
+	if err := results.Unmarshal(bytes); err != nil {
+		return nil, errors.Wrap(err, "unmarshalling results")
+	}
+	return &results, nil
+}
+
+func (r *rocksdbStore) Walk(ctx context.Context, fn func(obj *storage.ComplianceRunResults) error) error {
 	iterator := r.db.NewIterator(readOptions)
 	defer iterator.Close()
 	// Runs are sorted by time so we must iterate over each key to see if it has the correct run ID.
-	for iterator.Seek(metadataKey); iterator.ValidForPrefix(metadataKey); iterator.Next() {
-		domain, err := unmarshalMetadata(iterator)
+	for iterator.Seek(resultsKey); iterator.ValidForPrefix(resultsKey); iterator.Next() {
+		result, err := unmarshalResults(iterator)
 		if err != nil {
 			return err
 		}
-		if err = fn(domain); err != nil {
+		if err = fn(result); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *rocksdbStore) UpsertMany(ctx context.Context, objs []*storage.ComplianceRunMetadata) error {
+func (r *rocksdbStore) UpsertMany(ctx context.Context, objs []*storage.ComplianceRunResults) error {
 	batch := gorocksdb.NewWriteBatch()
 	defer batch.Destroy()
 
-	for _, metadata := range objs {
+	for _, obj := range objs {
+		metadata := obj.GetRunMetadata()
 		clusterID := metadata.GetClusterId()
 		standardID := metadata.GetStandardId()
 
-		serializedMD, err := metadata.Marshal()
+		serializedResults, err := obj.Marshal()
 		if err != nil {
-			return errors.Wrap(err, "serializing metadata")
+			return errors.Wrap(err, "serializing results")
 		}
 
 		maker := getKeyMaker(clusterID, standardID)
-		key, err := maker.getKeysForMetadata(metadata)
+		rKey, err := maker.getKeysForMetadata(metadata)
 		if err != nil {
 			return err
 		}
 
-		batch.Put(key, serializedMD)
+		// Store results under the key "compliance-run-results\x00results:CLUSTER:STANDARD:REVERSE_TIMESTAMP:RUN_ID
+		batch.Put(rKey, serializedResults)
 	}
-
 	return r.db.Write(writeOptions, batch)
 }
