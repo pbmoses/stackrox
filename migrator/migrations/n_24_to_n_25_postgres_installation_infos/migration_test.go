@@ -11,10 +11,11 @@ import (
 	legacy "github.com/stackrox/rox/migrator/migrations/n_24_to_n_25_postgres_installation_infos/legacy"
 	pgStore "github.com/stackrox/rox/migrator/migrations/n_24_to_n_25_postgres_installation_infos/postgres"
 	"github.com/stackrox/rox/pkg/bolthelper"
+	"github.com/stackrox/rox/pkg/sac"
+
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stackrox/rox/pkg/testutils/envisolator"
 	"github.com/stretchr/testify/suite"
@@ -78,7 +79,7 @@ func (s *postgresMigrationSuite) TestMigration() {
 	installationInfo := &storage.InstallationInfo{}
 	s.NoError(testutils.FullInit(installationInfo, testutils.UniqueInitializer(), testutils.JSONFieldsFilter))
 	s.NoError(legacyStore.Upsert(s.ctx, installationInfo))
-	s.NoError(move(s.legacyDB, s.gormDB, s.pool, legacyStore))
+	s.NoError(move(s.gormDB, s.pool, legacyStore))
 	fetched, found, err := store.Get(s.ctx)
 	s.NoError(err)
 	s.True(found)

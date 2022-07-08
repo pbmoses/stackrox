@@ -15,7 +15,6 @@ import (
 	pkgMigrations "github.com/stackrox/rox/pkg/migrations"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/sac"
-	bolt "go.etcd.io/bbolt"
 	"gorm.io/gorm"
 )
 
@@ -25,7 +24,7 @@ var (
 		VersionAfter:   storage.Version{SeqNum: int32(pkgMigrations.CurrentDBVersionSeqNum()) + 25},
 		Run: func(databases *types.Databases) error {
 			legacyStore := legacy.New(databases.BoltDB)
-			if err := move(databases.BoltDB, databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
+			if err := move(databases.GormDB, databases.PostgresDB, legacyStore); err != nil {
 				return errors.Wrap(err,
 					"moving installation_infos from rocksdb to postgres")
 			}
@@ -37,11 +36,11 @@ var (
 	log       = loghelper.LogWrapper{}
 )
 
-func move(legacyDB *bolt.DB, gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
+func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) error {
 	ctx := sac.WithAllAccess(context.Background())
 	store := pgStore.New(ctx, postgresDB)
 	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
-	config, found, err := legacyStore.Get(ctx)
+	obj, found, err := legacyStore.Get(ctx)
 	if err != nil {
 		log.WriteToStderr("failed to fetch installationInfo")
 		return err
@@ -49,8 +48,8 @@ func move(legacyDB *bolt.DB, gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacySt
 	if !found {
 		return nil
 	}
-	if err = store.Upsert(ctx, config); err != nil {
-		log.WriteToStderrf("failed to persist configs to store %v", err)
+	if err = store.Upsert(ctx, obj); err != nil {
+		log.WriteToStderrf("failed to persist object to store %v", err)
 		return err
 	}
 	return nil

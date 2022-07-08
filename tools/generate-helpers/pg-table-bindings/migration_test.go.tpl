@@ -188,7 +188,7 @@ func (s *postgresMigrationSuite) TestMigration() {
 	{{$name}} := &{{.Type}}{}
 	s.NoError(testutils.FullInit({{$name}}, testutils.UniqueInitializer(), testutils.JSONFieldsFilter))
 	s.NoError(legacyStore.Upsert(s.ctx, {{$name}}))
-	s.NoError(move(s.legacyDB, s.gormDB, s.pool, legacyStore))
+	s.NoError(move(s.gormDB, s.pool, legacyStore))
 	fetched, found, err := store.Get(s.ctx)
 	s.NoError(err)
 	s.True(found)

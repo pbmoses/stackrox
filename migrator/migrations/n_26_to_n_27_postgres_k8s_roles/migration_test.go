@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stackrox/rox/generated/storage"
 	legacy "github.com/stackrox/rox/migrator/migrations/n_26_to_n_27_postgres_k8s_roles/legacy"
+
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
@@ -88,7 +89,7 @@ func (s *postgresMigrationSuite) TestMigration() {
 		k8SRoles = append(k8SRoles, k8SRole)
 	}
 	s.NoError(legacyStore.UpsertMany(s.ctx, k8SRoles))
-	s.NoError(move(s.legacyDB, s.gormDB, s.pool, legacyStore))
+	s.NoError(move(s.gormDB, s.pool, legacyStore))
 	var count int64
 	s.gormDB.Model(pkgSchema.CreateTableK8sRolesStmt.GormModel).Count(&count)
 	s.Equal(int64(len(k8SRoles)), count)
