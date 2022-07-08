@@ -4,20 +4,21 @@ package n30ton31
 
 import (
 	"context"
+	"sort"
 	"testing"
 
-	"github.com/gogo/protobuf/proto"
+	"github.com/gogo/protobuf/types"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stackrox/rox/generated/storage"
-	legacy "github.com/stackrox/rox/migrator/migrations/n_28_to_n_29_postgres_network_baselines/legacy"
+	legacy "github.com/stackrox/rox/migrator/migrations/n_30_to_n_31_postgres_network_flows/legacy"
+	"github.com/stackrox/rox/migrator/migrations/n_30_to_n_31_postgres_network_flows/store"
+	"github.com/stackrox/rox/pkg/timestamp"
 
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
-	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/postgres"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stackrox/rox/pkg/testutils/envisolator"
 	"github.com/stackrox/rox/pkg/testutils/rocksdbtest"
@@ -70,43 +71,51 @@ func (s *postgresMigrationSuite) SetupTest() {
 
 func (s *postgresMigrationSuite) TearDownTest() {
 	rocksdbtest.TearDownRocksDB(s.legacyDB)
-	_ = s.gormDB.Migrator().DropTable(pkgSchema.CreateTableNetworkBaselinesStmt.GormModel)
+	_ = s.gormDB.Migrator().DropTable(pkgSchema.CreateTableNetworkFlowsStmt.GormModel)
 	pgtest.CleanUpDB(s.ctx, s.T(), s.pool)
 	pgtest.CloseGormDB(s.T(), s.gormDB)
 	s.pool.Close()
 }
-func (s *postgresMigrationSuite) TestMigration() {
-	// Prepare data and write to legacy DB
-	var networkBaselines []*storage.NetworkBaseline
-	legacyStore, err := legacy.New(s.legacyDB)
-	s.NoError(err)
-	batchSize = 48
-	rocksWriteBatch := gorocksdb.NewWriteBatch()
-	defer rocksWriteBatch.Destroy()
-	for i := 0; i < 200; i++ {
-		networkBaseline := &storage.NetworkBaseline{}
-		s.NoError(testutils.FullInit(networkBaseline, testutils.UniqueInitializer(), testutils.JSONFieldsFilter))
-		networkBaselines = append(networkBaselines, networkBaseline)
+
+func (s *postgresMigrationSuite) populateStore(clusterStore store.ClusterStore, clusterID string) (store.FlowStore, []*storage.NetworkFlow) {
+	var flows []*storage.NetworkFlow
+	for i := 0; i < 50; i++ {
+		flow := &storage.NetworkFlow{}
+		flow.LastSeenTimestamp = types.TimestampNow()
+		flow.ClusterId = "cluster1"
+		s.NoError(testutils.FullInit(flow, testutils.UniqueInitializer(), testutils.JSONFieldsFilter))
+		flows = append(flows, flow)
 	}
-	s.NoError(legacyStore.UpsertMany(s.ctx, networkBaselines))
-	s.NoError(move(s.gormDB, s.pool, legacyStore))
-	var count int64
-	s.gormDB.Model(pkgSchema.CreateTableNetworkBaselinesStmt.GormModel).Count(&count)
-	s.Equal(int64(len(networkBaselines)), count)
-	for _, networkBaseline := range networkBaselines {
-		s.Equal(networkBaseline, s.get(networkBaseline.GetDeploymentId()))
+	flowStore := clusterStore.GetFlowStore(clusterID)
+	s.NoError(flowStore.UpsertFlows(s.ctx, flows, timestamp.FromProtobuf(flows[len(flows)-1].LastSeenTimestamp)))
+	return flowStore, flows
+}
+
+func (s *postgresMigrationSuite) verify(flowStore store.FlowStore, flows []*storage.NetworkFlow) {
+	fetched, _, err := flowStore.GetAllFlows(s.ctx, &types.Timestamp{})
+	s.NoError(err)
+	s.Len(fetched, len(flows))
+	sort.SliceStable(fetched, func(i, j int) bool {
+		return fetched[i].LastSeenTimestamp.Compare(fetched[j].LastSeenTimestamp) < 0
+	})
+	sort.SliceStable(flows, func(i, j int) bool {
+		return flows[i].LastSeenTimestamp.Compare(flows[j].LastSeenTimestamp) < 0
+	})
+	for i, flow := range flows {
+		s.Equal(flow, fetched[i])
 	}
 }
 
-func (s *postgresMigrationSuite) get(deploymentId string) *storage.NetworkBaseline {
+func (s *postgresMigrationSuite) TestMigration() {
+	// Prepare data and write to legacy DB
+	legacyStore := legacy.NewClusterStore(s.legacyDB)
+	rocksWriteBatch := gorocksdb.NewWriteBatch()
+	defer rocksWriteBatch.Destroy()
 
-	q := search.ConjunctionQuery(
-		search.NewQueryBuilder().AddDocIDs(deploymentId).ProtoQuery(),
-	)
+	cluster1FlowStore, cluster1Flows := s.populateStore(legacyStore, "cluster1")
+	cluster2FlowStore, cluster2Flows := s.populateStore(legacyStore, "cluster2")
 
-	data, err := postgres.RunGetQueryForSchema(s.ctx, schema, q, s.pool)
-	s.NoError(err)
-	var msg storage.NetworkBaseline
-	s.NoError(proto.Unmarshal(data, &msg))
-	return &msg
+	s.NoError(move(s.gormDB, s.pool, legacyStore))
+	s.verify(cluster1FlowStore, cluster1Flows)
+	s.verify(cluster2FlowStore, cluster2Flows)
 }

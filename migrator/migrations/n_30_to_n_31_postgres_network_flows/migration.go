@@ -3,11 +3,11 @@ package n30ton31
 import (
 	"context"
 
+	protoTypes "github.com/gogo/protobuf/types"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/migrator/migrations"
-	"github.com/stackrox/rox/migrator/migrations/loghelper"
 	legacy "github.com/stackrox/rox/migrator/migrations/n_30_to_n_31_postgres_network_flows/legacy"
 	pgStore "github.com/stackrox/rox/migrator/migrations/n_30_to_n_31_postgres_network_flows/postgres"
 	"github.com/stackrox/rox/migrator/migrations/n_30_to_n_31_postgres_network_flows/store"
@@ -15,6 +15,7 @@ import (
 	pkgMigrations "github.com/stackrox/rox/pkg/migrations"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/timestamp"
 	"gorm.io/gorm"
 )
 
@@ -31,9 +32,7 @@ var (
 			return nil
 		},
 	}
-	batchSize = 10000
-	schema    = pkgSchema.NetworkBaselinesSchema
-	log       = loghelper.LogWrapper{}
+	schema = pkgSchema.NetworkFlowsSchema
 )
 
 func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore store.ClusterStore) error {
@@ -41,30 +40,17 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore store.ClusterSt
 	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
 
 	clusterStore := pgStore.NewClusterStore(postgresDB)
-	var networkBaselines []*storage.NetworkBaseline
 
-	var err error
-	walk(ctx, legacyStore, func(obj *storage.NetworkBaseline) error {
-		networkBaselines = append(networkBaselines, obj)
-		if len(networkBaselines) == batchSize {
-			if err := store.UpsertMany(ctx, networkBaselines); err != nil {
-				log.WriteToStderrf("failed to persist network_baselines to store %v", err)
-				return err
-			}
-			networkBaselines = networkBaselines[:0]
-		}
-		return nil
-	})
-	if len(networkBaselines) > 0 {
-		if err = store.UpsertMany(ctx, networkBaselines); err != nil {
-			log.WriteToStderrf("failed to persist network_baselines to store %v", err)
+	return walk(ctx, legacyStore, func(clusterID string, ts protoTypes.Timestamp, allFlows []*storage.NetworkFlow) error {
+		store, err := clusterStore.CreateFlowStore(ctx, clusterID)
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		return store.UpsertFlows(ctx, allFlows, timestamp.FromProtobuf(&ts))
+	})
 }
 
-func walk(ctx context.Context, s store.ClusterStore, fn func(obj *storage.NetworkBaseline) error) error {
+func walk(ctx context.Context, s store.ClusterStore, fn func(clusterID string, ts protoTypes.Timestamp, allFlows []*storage.NetworkFlow) error) error {
 	return s.Walk(ctx, fn)
 }
 

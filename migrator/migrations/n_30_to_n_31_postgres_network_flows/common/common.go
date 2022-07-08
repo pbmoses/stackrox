@@ -3,7 +3,6 @@ package common
 import (
 	"bytes"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -19,7 +18,6 @@ const (
 var (
 	idSeparator  = []byte(":")
 	keySeperator = []byte("\x00")
-	prefixRegex  = regexp.MustCompile(`^[^\00]\x00([])\x00`)
 )
 
 func GetClusterIDFromKey(key []byte) ([]byte, error) {
