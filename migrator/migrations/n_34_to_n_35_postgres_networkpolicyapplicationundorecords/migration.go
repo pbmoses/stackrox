@@ -42,7 +42,6 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
 	pkgSchema.ApplySchemaForTable(context.Background(), gormDB, schema.Table)
 	var networkpolicyapplicationundorecords []*storage.NetworkPolicyApplicationUndoRecord
 	var err error
-	// rocksDB false getall false
 	walk(ctx, legacyStore, func(obj *storage.NetworkPolicyApplicationUndoRecord) error {
 		networkpolicyapplicationundorecords = append(networkpolicyapplicationundorecords, obj)
 		if len(networkpolicyapplicationundorecords) == batchSize {
@@ -62,8 +61,6 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
 	}
 	return nil
 }
-
-// getall false bolt true
 
 func walk(ctx context.Context, s legacy.Store, fn func(obj *storage.NetworkPolicyApplicationUndoRecord) error) error {
 	return s.Walk(ctx, fn)

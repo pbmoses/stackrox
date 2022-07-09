@@ -89,7 +89,6 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
 	    {{- if or $rocksDB (not .GetAll) }}
 	    var {{.Table|lowerCamelCase}} []*{{.Type}}
 	    var err error
-	    // rocksDB {{$rocksDB}} getall {{.GetAll}}
 	    walk(ctx, legacyStore, func(obj *{{.Type}}) error {
 		    {{.Table|lowerCamelCase}} = append({{.Table|lowerCamelCase}}, obj)
 		    if len({{.Table|lowerCamelCase}}) == batchSize {
@@ -117,7 +116,6 @@ func move(gormDB *gorm.DB, postgresDB *pgxpool.Pool, legacyStore legacy.Store) e
     {{- end}}
 	return nil
 }
-// getall {{.GetAll}} bolt {{$boltDB}}
 {{if and (not .Migration.SingletonStore) (or $rocksDB (not .GetAll))}}
 func walk(ctx context.Context, s legacy.Store, fn func(obj *{{.Type}}) error) error {
     {{- if $dackbox}}
