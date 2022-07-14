@@ -1,8 +1,9 @@
-package store
+package bolt
 
 import (
 	"testing"
 
+	"github.com/stackrox/rox/central/group/datastore/internal/store"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/bolthelper"
 	"github.com/stackrox/rox/pkg/errox"
@@ -21,7 +22,7 @@ type GroupStoreTestSuite struct {
 
 	db *bolt.DB
 
-	sto Store
+	sto store.Store
 }
 
 func (s *GroupStoreTestSuite) SetupTest() {

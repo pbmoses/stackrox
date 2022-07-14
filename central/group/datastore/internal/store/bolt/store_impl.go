@@ -1,12 +1,41 @@
-package store
+package bolt
 
 import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
+	"github.com/stackrox/rox/central/group/datastore/internal/store"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/bolthelper"
 	"github.com/stackrox/rox/pkg/errox"
+	"github.com/stackrox/rox/pkg/utils"
 	bolt "go.etcd.io/bbolt"
 )
+
+var groupsBucket = []byte("groups2")
+
+var isEmptyGroupPropertiesF = func(props *storage.GroupProperties) bool {
+	if props.GetAuthProviderId() == "" && props.GetKey() == "" && props.GetValue() == "" {
+		return true
+	}
+	return false
+}
+
+// New returns a new instance of a Store.
+func New(db *bolt.DB) store.Store {
+	bolthelper.RegisterBucketOrPanic(db, groupsBucket)
+
+	store := &storeImpl{
+		db: db,
+	}
+	grps, err := store.GetFiltered(isEmptyGroupPropertiesF)
+	utils.Should(err)
+	for _, grp := range grps {
+		err = store.Remove(grp.GetProps())
+		utils.Should(err)
+	}
+
+	return store
+}
 
 // We use custom serialization for speed since this store will need to be 'Walked'
 // to find all of the roles that apply to a given user.
