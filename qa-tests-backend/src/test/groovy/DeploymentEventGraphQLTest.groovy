@@ -93,7 +93,6 @@ class DeploymentEventGraphQLTest extends BaseSpecification {
     private final gqlService = new GraphQLService()
 
     @Category(GraphQL)
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "Verify Deployment Events in GraphQL"() {
         when:
         "Validate Policy Violation is Triggered"
