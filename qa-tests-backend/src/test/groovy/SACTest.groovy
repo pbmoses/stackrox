@@ -229,7 +229,6 @@ class SACTest extends BaseSpecification {
     }
 
     @Unroll
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "Verify that only namespace #sacResource is visible when using SAC"() {
         when:
         "Create test API token with a built-in role"
@@ -249,7 +248,6 @@ class SACTest extends BaseSpecification {
         NAMESPACE_QA2 | _
     }
 
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "Verify GetSummaryCounts using a token without access receives no results"() {
         when:
         "GetSummaryCounts is called using a token without access"
@@ -269,7 +267,6 @@ class SACTest extends BaseSpecification {
         deleteSecret(DEPLOYMENT_QA1.namespace)
     }
 
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "Verify GetSummaryCounts using a token with partial access receives partial results"() {
         when:
         "GetSummaryCounts is called using a token with restricted access"
@@ -368,7 +365,6 @@ class SACTest extends BaseSpecification {
     }
 
     @Unroll
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "Verify Search on #category resources using the #tokenName token returns #numResults results"() {
         when:
         "A search is performed using the given token"
@@ -430,7 +426,6 @@ class SACTest extends BaseSpecification {
     }
 
     @Unroll
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "Verify Autocomplete on #category resources using the #tokenName token returns #numResults results"() {
         when:
         "Search is called using a token without view access to Deployments"
@@ -470,7 +465,6 @@ class SACTest extends BaseSpecification {
     }
 
     @Unroll
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "Verify using the #tokenName token with the #service service returns #numReturned results"() {
         when:
         "The service under test is called using the given token"
@@ -546,7 +540,6 @@ class SACTest extends BaseSpecification {
     }
 
     @Unroll
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "Verify search with SAC and token #tokenName yields the same number of results as restricted search"() {
         when:
         "Searching for categories ${categories} in namespace ${namespace} with basic auth"
@@ -649,7 +642,6 @@ class SACTest extends BaseSpecification {
                 allAccessFlows.size() - allAccessFlowsWithoutNeighbors.size()
     }
 
-    @IgnoreIf({ Env.CI_JOBNAME.contains("postgres") })
     def "test role aggregation should not combine permissions sets"() {
         when:
         useToken("aggregatedToken")
