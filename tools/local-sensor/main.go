@@ -302,6 +302,7 @@ func main() {
 	spyCentral.KillSwitch.Signal()
 }
 
+// SensorMessageJSONOutput output format for messages sent to central
 type SensorMessageJSONOutput struct {
 	ScenarioStart      string                   `json:"scenario_start"`
 	ScenarioEnd        string                   `json:"scenario_end"`

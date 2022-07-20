@@ -363,12 +363,8 @@ func (f *FakeEventsManager) Init() {
 		deploymentKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*appsv1.DeploymentList)
 			errorList := errorhelpers.NewErrorList("resource list function")
-			var names []string
 			for _, it := range list.Items {
-				names = append(names, it.GetName())
-			}
-			for _, it := range names {
-				if err := f(it); err != nil {
+				if err := f(it.GetName()); err != nil {
 					errorList.AddError(err)
 				}
 			}
@@ -397,12 +393,8 @@ func (f *FakeEventsManager) Init() {
 		podKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*corev1.PodList)
 			errorList := errorhelpers.NewErrorList("resource list function")
-			var names []string
 			for _, it := range list.Items {
-				names = append(names, it.GetName())
-			}
-			for _, it := range names {
-				if err := f(it); err != nil {
+				if err := f(it.GetName()); err != nil {
 					errorList.AddError(err)
 				}
 			}
