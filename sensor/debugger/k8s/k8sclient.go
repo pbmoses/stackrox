@@ -26,6 +26,7 @@ func MakeFakeClient() *ClientSet {
 	}
 }
 
+// MakeFakeClientFromRest creates a k8s client from a rest.Config
 func MakeFakeClientFromRest(restConfig *rest.Config) *ClientSet {
 	client, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {

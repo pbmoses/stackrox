@@ -10,12 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stackrox/rox/pkg/sync"
-	"github.com/stackrox/rox/sensor/testutils"
-
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/testutils/envisolator"
 	"github.com/stackrox/rox/pkg/utils"
 	centralDebug "github.com/stackrox/rox/sensor/debugger/central"
@@ -23,6 +21,7 @@ import (
 	"github.com/stackrox/rox/sensor/debugger/message"
 	"github.com/stackrox/rox/sensor/kubernetes/listener/resources"
 	"github.com/stackrox/rox/sensor/kubernetes/sensor"
+	"github.com/stackrox/rox/sensor/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/grpc"
@@ -323,10 +322,6 @@ func readSensorOutputFile(fname string) ([]*central.MsgFromSensor, error) {
 	}
 	return msgs, nil
 }
-
-//type deploymentAlert struct {
-//	alerts map[string]*storage.Alert
-//}
 
 func getAlerts(messages []*central.MsgFromSensor) map[string]map[string]*storage.Alert {
 	events := make(map[string]map[string]*storage.Alert)

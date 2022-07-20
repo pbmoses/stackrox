@@ -12,11 +12,12 @@ import (
 	"github.com/stackrox/rox/pkg/errorhelpers"
 )
 
+// GetPoliciesFromFile reads a file containing storage.Policy. Return a slice of storage.Policy with the content of the file
 func GetPoliciesFromFile(fileName string) (policies []*storage.Policy, retError error) {
 	policiesMsg := &localSensor.LocalSensorPolicies{}
 	file, err := os.OpenFile(fileName, os.O_RDONLY, 0644)
 	if err != nil {
-		retError = fmt.Errorf("error opening %s: %s\n", fileName, err)
+		retError = fmt.Errorf("error opening %s: %w\n", fileName, err)
 		return
 	}
 	errorList := errorhelpers.NewErrorList("read policies from file")
@@ -38,10 +39,16 @@ func GetPoliciesFromFile(fileName string) (policies []*storage.Policy, retError 
 					for i, r := range s {
 						if unicode.IsUpper(r) && i > 0 {
 							if unicode.IsLetter(rune(s[i-1])) && (!unicode.IsUpper(rune(s[i-1])) || (i < len(s)-1 && !unicode.IsUpper(rune(s[i+1])))) {
-								buf.WriteRune(' ')
+								if _, err := buf.WriteRune(' '); err != nil {
+									errorList.AddError(err)
+									continue
+								}
 							}
 						}
-						buf.WriteRune(r)
+						if _, err := buf.WriteRune(r); err != nil {
+							errorList.AddError(err)
+							continue
+						}
 					}
 					return buf.String()
 				}

@@ -35,6 +35,7 @@ var (
 		"sensor/upgrader",
 		"sensor/debugger",
 		"sensor/tests",
+		"sensor/testutils",
 		"tools",
 		"webhookserver",
 		"operator",
@@ -217,7 +218,7 @@ func verifyImportsFromAllowedPackagesOnly(pass *analysis.Pass, imports []*ast.Im
 
 	if validImportRoot == "tools" {
 		allowedPackages = append(allowedPackages, "central/globaldb", "central/metrics", "central/postgres", "central/role/resources",
-			"sensor/kubernetes/sensor", "sensor/debugger")
+			"sensor/kubernetes/sensor", "sensor/debugger", "sensor/testutils")
 	}
 
 	if validImportRoot == "sensor/kubernetes" {
@@ -231,7 +232,7 @@ func verifyImportsFromAllowedPackagesOnly(pass *analysis.Pass, imports []*ast.Im
 	}
 
 	if validImportRoot == "sensor/tests" {
-		allowedPackages = append(allowedPackages, "sensor/common", "sensor/kubernetes", "sensor/debugger")
+		allowedPackages = append(allowedPackages, "sensor/common", "sensor/kubernetes", "sensor/debugger", "sensor/testutils")
 	}
 
 	for _, imp := range imports {
