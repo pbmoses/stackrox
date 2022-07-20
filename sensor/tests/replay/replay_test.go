@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stackrox/rox/pkg/sync"
+	"github.com/stackrox/rox/sensor/testutils"
 
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/stackrox/rox/generated/internalapi/central"
@@ -40,10 +41,10 @@ type ReplayEventsSuite struct {
 	envIsolator *envisolator.EnvIsolator
 }
 
-var _ suite.SetupTestSuite = (*ReplayEventsSuite)(nil)
-var _ suite.TearDownTestSuite = (*ReplayEventsSuite)(nil)
+var _ suite.SetupAllSuite = (*ReplayEventsSuite)(nil)
+var _ suite.TearDownAllSuite = (*ReplayEventsSuite)(nil)
 
-func (suite *ReplayEventsSuite) SetupTest() {
+func (suite *ReplayEventsSuite) SetupSuite() {
 	suite.fakeClient = k8s.MakeFakeClient()
 
 	suite.envIsolator = envisolator.NewEnvIsolator(suite.T())
@@ -52,14 +53,18 @@ func (suite *ReplayEventsSuite) SetupTest() {
 	suite.envIsolator.Setenv("ROX_MTLS_CA_FILE", "../../../tools/local-sensor/certs/caCert.pem")
 	suite.envIsolator.Setenv("ROX_MTLS_CA_KEY_FILE", "../../../tools/local-sensor/certs/caKey.pem")
 
+	policies, err := testutils.GetPoliciesFromFile("data/policies.json")
+	if err != nil {
+		panic(err)
+	}
 	suite.fakeCentral = centralDebug.MakeFakeCentralWithInitialMessages(
 		message.SensorHello("1234"),
 		message.ClusterConfig(),
-		message.PolicySync([]*storage.Policy{}),
+		message.PolicySync(policies),
 		message.BaselineSync([]*storage.ProcessBaseline{}))
 }
 
-func (suite *ReplayEventsSuite) TearDownTest() {
+func (suite *ReplayEventsSuite) TearDownSuite() {
 	suite.envIsolator.RestoreAll()
 }
 
@@ -173,9 +178,13 @@ func (suite *ReplayEventsSuite) Test_ReplayEvents() {
 		k8sEventsFile    string
 		sensorOutputFile string
 	}{
-		"Safety net test": {
-			k8sEventsFile:    "data/safety-net-k8s-trace.jsonl",
-			sensorOutputFile: "data/safety-net-central-out.bin",
+		"Safety net test: Alerts": {
+			k8sEventsFile:    "data/safety-net-alerts-k8s-trace.jsonl",
+			sensorOutputFile: "data/safety-net-alerts-central-out.bin",
+		},
+		"Safety net test: Resources": {
+			k8sEventsFile:    "data/safety-net-resources-k8s-trace.jsonl",
+			sensorOutputFile: "data/safety-net-resources-central-out.bin",
 		},
 	}
 	for name, c := range cases {
@@ -221,6 +230,23 @@ func (suite *ReplayEventsSuite) Test_ReplayEvents() {
 			if err != nil {
 				panic(err)
 			}
+			expectedAlerts := getAlerts(expectedEvents)
+			receivedAlerts := getAlerts(allEvents)
+			assert.Equal(t, len(expectedAlerts), len(receivedAlerts))
+			for id, expectedAlertEvent := range expectedAlerts {
+				if receivedAlertEvent, ok := receivedAlerts[id]; !ok {
+					t.Error("Deployment Alert Event not found")
+				} else {
+					assert.Equal(t, len(expectedAlertEvent), len(receivedAlertEvent))
+					for alertID, exp := range expectedAlertEvent {
+						if a, ok := receivedAlertEvent[alertID]; !ok {
+							t.Error("Alert not found")
+						} else {
+							assert.Equal(t, exp.GetState(), a.GetState())
+						}
+					}
+				}
+			}
 			expectedDeployments := getLastStateFromDeployments(expectedEvents)
 			receivedDeployments := getLastStateFromDeployments(allEvents)
 			assert.Equal(t, len(expectedDeployments), len(receivedDeployments))
@@ -250,6 +276,10 @@ func (suite *ReplayEventsSuite) Test_ReplayEvents() {
 				}
 			}
 			cancelFunc()
+			if err := fm.DeleteAllResources(); err != nil {
+				panic(err)
+			}
+			time.Sleep(5 * resyncTime)
 		})
 	}
 }
@@ -292,6 +322,27 @@ func readSensorOutputFile(fname string) ([]*central.MsgFromSensor, error) {
 		msgs = append(msgs, m)
 	}
 	return msgs, nil
+}
+
+//type deploymentAlert struct {
+//	alerts map[string]*storage.Alert
+//}
+
+func getAlerts(messages []*central.MsgFromSensor) map[string]map[string]*storage.Alert {
+	events := make(map[string]map[string]*storage.Alert)
+	for _, msg := range messages {
+		event := msg.GetEvent()
+		if event.GetAlertResults() != nil {
+			if event.GetAlertResults().GetDeploymentId() != "" {
+				alerts := make(map[string]*storage.Alert)
+				for _, a := range event.GetAlertResults().GetAlerts() {
+					alerts[a.GetPolicy().GetId()] = a
+				}
+				events[event.GetAlertResults().GetDeploymentId()] = alerts
+			}
+		}
+	}
+	return events
 }
 
 func getLastStateFromDeployments(messages []*central.MsgFromSensor) map[string]*central.SensorEvent {
