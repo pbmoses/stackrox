@@ -79,7 +79,7 @@ type FakeEventsManager struct {
 	// resourceMap map with the k8s resources
 	resourceMap map[string]interface{}
 	// resourceListMap map with the k8s resource Lists
-	resourceListMap map[string]func(reflect.Value, reflect.Value, func(string) error) error
+	resourceListMap map[string]func(reflect.Value, func(string) error) error
 }
 
 const (
@@ -219,8 +219,8 @@ func (f *FakeEventsManager) Init() {
 		cronJobKind:               &batchv1.CronJob{},
 		podKind:                   &corev1.Pod{},
 	}
-	f.resourceListMap = map[string]func(reflect.Value, reflect.Value, func(string) error) error{
-		namespaceKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+	f.resourceListMap = map[string]func(reflect.Value, func(string) error) error{
+		namespaceKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*corev1.NamespaceList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -230,7 +230,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		clusterRoleKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		clusterRoleKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*rbacv1.ClusterRoleList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -240,7 +240,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		clusterRoleBindingKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		clusterRoleBindingKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*rbacv1.ClusterRoleBindingList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -250,7 +250,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		nodeKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		nodeKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*corev1.NodeList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -260,7 +260,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		secretKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		secretKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*corev1.SecretList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -270,7 +270,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		serviceAccountsKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		serviceAccountsKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*corev1.ServiceAccountList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -280,7 +280,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		roleKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		roleKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*rbacv1.RoleList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -290,7 +290,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		roleBindingKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		roleBindingKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*rbacv1.RoleBindingList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -300,7 +300,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		networkPolicyKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		networkPolicyKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*networkingv1.NetworkPolicyList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -310,7 +310,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		serviceKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		serviceKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*corev1.ServiceList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -320,7 +320,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		jobKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		jobKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*batchv1.JobList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -330,7 +330,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		replicaSetKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		replicaSetKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*appsv1.ReplicaSetList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -340,7 +340,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		replicationControllerKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		replicationControllerKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*corev1.ReplicationControllerList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -350,7 +350,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		daemonSetKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		daemonSetKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*appsv1.DaemonSetList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -360,7 +360,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		deploymentKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		deploymentKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*appsv1.DeploymentList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -370,7 +370,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		statefulSetKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		statefulSetKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*appsv1.StatefulSetList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -380,7 +380,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		cronJobKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		cronJobKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*batchv1.CronJobList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -390,7 +390,7 @@ func (f *FakeEventsManager) Init() {
 			}
 			return errorList.ToError()
 		},
-		podKind: func(obj reflect.Value, cl reflect.Value, f func(string) error) error {
+		podKind: func(obj reflect.Value, f func(string) error) error {
 			list := obj.Interface().(*corev1.PodList)
 			errorList := errorhelpers.NewErrorList("resource list function")
 			for _, it := range list.Items {
@@ -639,7 +639,7 @@ func (f *FakeEventsManager) execFuncToAllResourcesOfKind(kind string, client ref
 	if !ok {
 		return fmt.Errorf("kind %s not found", kind)
 	}
-	err := resFunc(returnVals[0], client, execFunc)
+	err := resFunc(returnVals[0], execFunc)
 
 	if err != nil {
 		return err
