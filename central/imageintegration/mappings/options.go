@@ -6,4 +6,5 @@ import (
 	"github.com/stackrox/rox/pkg/search"
 )
 
+//OptionsMap test
 var OptionsMap = search.Walk(v1.SearchCategory_IMAGE_INTEGRATIONS, "image_integration", (*storage.ImageIntegration)(nil))

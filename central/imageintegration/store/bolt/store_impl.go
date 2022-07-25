@@ -9,6 +9,7 @@ import (
 	"github.com/stackrox/rox/central/metrics"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/bolthelper"
+	protoCrud "github.com/stackrox/rox/pkg/bolthelper/crud/proto"
 	"github.com/stackrox/rox/pkg/dberrors"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/secondarykey"
@@ -17,6 +18,20 @@ import (
 
 type storeImpl struct {
 	*bolt.DB
+	crud protoCrud.MessageCrud
+}
+
+func (b *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
+	defer metrics.SetBoltOperationDurationTime(time.Now(), ops.GetAll, "ImageIntegration")
+	iis, err := b.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(iis))
+	for _, ii := range iis {
+		ids = append(ids, ii.Id)
+	}
+	return ids, nil
 }
 
 func (b *storeImpl) getImageIntegration(id string, bucket *bolt.Bucket) (integration *storage.ImageIntegration, exists bool, err error) {

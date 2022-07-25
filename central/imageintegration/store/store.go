@@ -12,4 +12,5 @@ type Store interface {
 	GetAll(ctx context.Context) ([]*storage.ImageIntegration, error)
 	Upsert(ctx context.Context, integration *storage.ImageIntegration) error
 	Delete(ctx context.Context, id string) error
+	GetIDs(ctx context.Context) ([]string, error)
 }

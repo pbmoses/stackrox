@@ -3,13 +3,19 @@ package datastore
 import (
 	"context"
 
+	"github.com/stackrox/rox/central/imageintegration/index"
 	"github.com/stackrox/rox/central/imageintegration/store"
 	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/uuid"
+)
+
+const (
+	imageIntegrationBatchSize = 1000
 )
 
 var (
@@ -18,11 +24,17 @@ var (
 
 type datastoreImpl struct {
 	storage  store.Store
+	indexer  index.Indexer
 	searcher search.Searcher
 }
 
 func (ds *datastoreImpl) Search(ctx context.Context, q *v1.Query) ([]search.Result, error) {
-	return ds.searcher.Search(ctx, q)
+	integrations, err := ds.searcher.Search(ctx, q)
+	if err != nil {
+		log.Error(err.Error() + " Failed to search image integrations")
+		return nil, err
+	}
+	return integrations, nil
 }
 
 // GetImageIntegration is pass-through to the underlying store.
@@ -94,4 +106,15 @@ func (ds *datastoreImpl) RemoveImageIntegration(ctx context.Context, id string) 
 	}
 
 	return ds.storage.Delete(ctx, id)
+}
+
+func (ds *datastoreImpl) buildIndex(ctx context.Context) error {
+	if features.PostgresDatastore.Enabled() {
+		return nil
+	}
+	iis, err := ds.storage.GetAll(ctx)
+	if err != nil {
+		return err
+	}
+	return ds.indexer.AddImageIntegrations(iis)
 }
