@@ -7,16 +7,6 @@ import (
 )
 
 type Set[KeyType comparable] map[KeyType]struct{}
-type StringSet = Set[string]
-type FrozenStringSet = FrozenSet[string]
-
-func NewStringSet(initial ...string) Set[string] {
-	return NewSet(initial...)
-}
-
-func NewFrozenStringSet(initial ...string) FrozenSet[string] {
-	return NewFrozenSet(initial...)
-}
 
 // Add adds an element of type KeyType.
 func (k *Set[KeyType]) Add(i KeyType) bool {
