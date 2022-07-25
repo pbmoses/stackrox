@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// Set is generic set type.
 type Set[KeyType comparable] map[KeyType]struct{}
 
 // Add adds an element of type KeyType.
@@ -290,16 +291,16 @@ type sortableSlice[KeyType comparable] struct {
 	less  func(i, j KeyType) bool
 }
 
-func (s *sortableSlice[KeyType]) Len() int {
-	return len(s.slice)
+func (k *sortableSlice[KeyType]) Len() int {
+	return len(k.slice)
 }
 
-func (s *sortableSlice[KeyType]) Less(i, j int) bool {
-	return s.less(s.slice[i], s.slice[j])
+func (k *sortableSlice[KeyType]) Less(i, j int) bool {
+	return k.less(k.slice[i], k.slice[j])
 }
 
-func (s *sortableSlice[KeyType]) Swap(i, j int) {
-	s.slice[j], s.slice[i] = s.slice[i], s.slice[j]
+func (k *sortableSlice[KeyType]) Swap(i, j int) {
+	k.slice[j], k.slice[i] = k.slice[i], k.slice[j]
 }
 
 // A FrozenSet is a frozen set of KeyType elements, which
