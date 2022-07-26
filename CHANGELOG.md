@@ -9,6 +9,8 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
   - Any cluster that is expected to be unavailable for a period of time (e.g. clusters used in disaster recovery), can be tagged with a customizable label. Clusters with those labels will never be removed automatically.
 - ROX-11784: The `RenamePolicyCategory` and `DeletePolicyCategory` methods in the
     `v1/policycategories` endpoint have been removed.
+- ROX-11524: Previously deprecated `AuthPlugin` feature has been removed.
+
 ## [3.71.0]
 
 - ROX-8051: The default collection method is changed from KernelModule to eBPF, following improved eBPF performance in collector.
