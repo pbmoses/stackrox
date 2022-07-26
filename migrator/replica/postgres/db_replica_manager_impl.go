@@ -44,11 +44,10 @@ func (d *DBReplicaManagerImpl) Scan() error {
 		case knownReplicas.Contains(name):
 			log.Infof("SHREWS -- known replica - %s", name)
 
-			if d.databaseExists(replicas, name) {
-				log.Info("SHREWS -- database exists for replica")
-			}
+			pool := pgadmin.GetReplicaPool(d.adminConfig, name)
+			defer pool.Close()
 
-			ver, err := migrations.ReadVersion(name, d.adminConfig)
+			ver, err := migrations.ReadVersion(pool)
 			if err != nil {
 				return err
 			}

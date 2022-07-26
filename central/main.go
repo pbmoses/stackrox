@@ -255,7 +255,7 @@ func main() {
 			log.Errorf("Failed to remove backup DB: %v", err)
 		}
 
-		migrations.SetCurrentVersion(migrations.CurrentReplica(), config)
+		migrations.SetCurrentVersion(globaldb.GetPostgres())
 
 	} else {
 		// Now that we verified that the DB can be loaded, remove the .backup directory
