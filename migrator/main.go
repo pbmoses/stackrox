@@ -9,9 +9,9 @@ import (
 	"github.com/stackrox/rox/migrator/bolthelpers"
 	"github.com/stackrox/rox/migrator/compact"
 	"github.com/stackrox/rox/migrator/log"
-	"github.com/stackrox/rox/migrator/option"
 	"github.com/stackrox/rox/migrator/postgreshelper"
-	"github.com/stackrox/rox/migrator/replica"
+	"github.com/stackrox/rox/migrator/replica/postgres"
+	"github.com/stackrox/rox/migrator/replica/rocksdb"
 	"github.com/stackrox/rox/migrator/rockshelper"
 	"github.com/stackrox/rox/migrator/runner"
 	"github.com/stackrox/rox/migrator/types"
@@ -19,6 +19,7 @@ import (
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/grpc/routes"
 	"github.com/stackrox/rox/pkg/migrations"
+	"github.com/stackrox/rox/pkg/postgres/pgconfig"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
 	"gorm.io/gorm"
 )
@@ -45,6 +46,7 @@ func startProfilingServer() {
 }
 
 func run() error {
+	log.WriteToStderr("In migrator.run()")
 	conf := config.GetConfig()
 	if conf == nil {
 		log.WriteToStderrf("cannot get central configuration. Skipping migrator")
@@ -56,38 +58,76 @@ func run() error {
 		return nil
 	}
 
-	// TODO: ROX-9884, ROX-10700 -- turn off replicas and migrations until Postgres updates complete.
-	if !features.PostgresDatastore.Enabled() {
-		dbm, err := replica.Scan(migrations.DBMountPath(), conf.Maintenance.ForceRollbackVersion)
+	if features.PostgresDatastore.Enabled() {
+		sourceMap, adminConfig, err := pgconfig.GetPostgresConfig()
+		if err != nil {
+			return errors.Wrap(err, "unable to get Postgres DB config.")
+		}
+		dbm := postgres.New(conf.Maintenance.ForceRollbackVersion, adminConfig, sourceMap)
+
+		// Scan for database replicas
+		err = dbm.Scan()
 		if err != nil {
 			return errors.Wrap(err, "fail to scan replicas")
 		}
 
-		replicaName, replicaPath, err := dbm.GetReplicaToMigrate()
-		if err != nil {
-			return err
+		// If we have database replicas we need to process them.  Otherwise, we can assume we are
+		// starting from scratch and as such we will need to create the DB and apply schemas with Gorm.
+		if len(dbm.ReplicaMap) > 0 {
+			replica, _, err := dbm.GetReplicaToMigrate()
+			if err != nil {
+				return err
+			}
+
+			// Run upgrades
+			if err = upgrade(conf); err != nil {
+				return err
+			}
+
+			// Save the replica
+			if err = dbm.Persist(replica); err != nil {
+				return err
+			}
+		} else {
+			// No existing DB replica so need to create it.
+			gormDB, err := postgreshelper.Load(conf)
+			if err != nil {
+				return errors.Wrap(err, "failed to connect to postgres DB")
+			}
+			pkgSchema.ApplyAllSchemas(context.Background(), gormDB)
 		}
-		option.MigratorOptions.DBPathBase = replicaPath
-		if err = upgrade(conf); err != nil {
-			return err
-		}
-		if err = dbm.Persist(replicaName); err != nil {
-			return err
-		}
-	} else {
-		var gormDB *gorm.DB
-		gormDB, err := postgreshelper.Load(conf)
-		if err != nil {
-			return errors.Wrap(err, "failed to connect to postgres DB")
-		}
-		pkgSchema.ApplyAllSchemas(context.Background(), gormDB)
-		log.WriteToStderr("Applied all table schemas.")
+
+		return nil
 	}
 
+	dbm := rocksdb.New(migrations.DBMountPath(), conf.Maintenance.ForceRollbackVersion)
+	err := dbm.Scan()
+	if err != nil {
+		return errors.Wrap(err, "fail to scan replicas")
+	}
+
+	replica, _, err := dbm.GetReplicaToMigrate()
+	if err != nil {
+		return err
+	}
+
+	if err = upgrade(conf); err != nil {
+		return err
+	}
+
+	if err = dbm.Persist(replica); err != nil {
+		return err
+	}
 	return nil
 }
 
 func upgrade(conf *config.Config) error {
+	// TODO: ROX-10700 -- turn off migrations until Postgres updates complete.
+	if features.PostgresDatastore.Enabled() {
+		log.WriteToStderr("Postgres migrations are not ready yet.  Skipping....")
+		return nil
+	}
+
 	if err := compact.Compact(conf); err != nil {
 		log.WriteToStderrf("error compacting DB: %v", err)
 	}

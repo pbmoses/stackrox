@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/stackrox/rox/pkg/config"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/retry"
 )
@@ -21,8 +22,14 @@ const (
 	// AdminDB - name of admin database
 	AdminDB = "postgres"
 
-	postgresOpenRetries        = 10
-	postgresTimeBetweenRetries = 10 * time.Second
+	// EmptyDB - name of an empty database (automatically created by postgres)
+	EmptyDB = "template0"
+
+	// PostgresOpenRetries - number of retries when trying to open a connection
+	PostgresOpenRetries = 10
+
+	// PostgresTimeBetweenRetries - time to wait between retries
+	PostgresTimeBetweenRetries = 10 * time.Second
 )
 
 // DropDB - drops a database.
@@ -83,13 +90,13 @@ func RenameDB(adminPool *pgxpool.Pool, originalDB, newDB string) error {
 }
 
 // CheckIfDBExists - checks to see if a restore database exists
-func CheckIfDBExists(config *pgxpool.Config, dbName string) bool {
+func CheckIfDBExists(pgConfig *pgxpool.Config, dbName string) bool {
 	log.Infof("CheckIfDBExists - %q", dbName)
 	ctx, cancel := context.WithTimeout(context.Background(), postgresQueryTimeout)
 	defer cancel()
 
 	// Connect to different database for admin functions
-	connectPool := GetAdminPool(config)
+	connectPool := GetAdminPool(pgConfig)
 	// Close the admin connection pool
 	defer connectPool.Close()
 
@@ -105,23 +112,71 @@ func CheckIfDBExists(config *pgxpool.Config, dbName string) bool {
 	return exists
 }
 
+// GetDatabaseReplicas - returns list of database replicas based off base database
+func GetDatabaseReplicas(pgConfig *pgxpool.Config) []string {
+	log.Debug("GetDatabaseReplicas")
+	ctx, cancel := context.WithTimeout(context.Background(), postgresQueryTimeout)
+	defer cancel()
+
+	// Connect to different database for admin functions
+	connectPool := GetAdminPool(pgConfig)
+	// Close the admin connection pool
+	defer connectPool.Close()
+
+	selectStmt := fmt.Sprintf("SELECT datname FROM pg_catalog.pg_database WHERE datname ~ '^%s.*'", config.GetConfig().CentralDB.DatabaseName)
+
+	rows, err := connectPool.Query(ctx, selectStmt)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var replicas []string
+	for rows.Next() {
+		var replicaName string
+		if err := rows.Scan(&replicaName); err != nil {
+			return nil
+		}
+
+		replicas = append(replicas, replicaName)
+	}
+
+	log.Debugf("database replicas => %t", replicas)
+
+	return replicas
+}
+
 // GetAdminPool - returns a pool to connect to the admin database.
 // This is useful for renaming databases such as a restore to active.
-func GetAdminPool(config *pgxpool.Config) *pgxpool.Pool {
-	var err error
-	var postgresDB *pgxpool.Pool
-
+func GetAdminPool(pgConfig *pgxpool.Config) *pgxpool.Pool {
 	// Clone config to connect to template DB
-	tempConfig := config.Copy()
+	tempConfig := pgConfig.Copy()
 
 	// Need to connect on a static DB so we can rename the used DBs.
 	tempConfig.ConnConfig.Database = AdminDB
 
+	return getPool(tempConfig)
+}
+
+func GetReplicaPool(pgConfig *pgxpool.Config, replica string) *pgxpool.Pool {
+	// Clone config to connect to template DB
+	tempConfig := pgConfig.Copy()
+
+	// Need to connect on a static DB so we can rename the used DBs.
+	tempConfig.ConnConfig.Database = replica
+
+	return getPool(tempConfig)
+}
+
+func getPool(pgConfig *pgxpool.Config) *pgxpool.Pool {
+	var err error
+	var postgresDB *pgxpool.Pool
+
 	if err := retry.WithRetry(func() error {
-		postgresDB, err = pgxpool.ConnectConfig(context.Background(), tempConfig)
+		postgresDB, err = pgxpool.ConnectConfig(context.Background(), pgConfig)
 		return err
-	}, retry.Tries(postgresOpenRetries), retry.BetweenAttempts(func(attempt int) {
-		time.Sleep(postgresTimeBetweenRetries)
+	}, retry.Tries(PostgresOpenRetries), retry.BetweenAttempts(func(attempt int) {
+		time.Sleep(PostgresTimeBetweenRetries)
 	}), retry.OnFailedAttempts(func(err error) {
 		log.Errorf("open database: %v", err)
 	})); err != nil {

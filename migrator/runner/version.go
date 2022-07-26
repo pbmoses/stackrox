@@ -7,6 +7,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/migrator/bolthelpers"
+	"github.com/stackrox/rox/migrator/log"
 	"github.com/stackrox/rox/migrator/types"
 	"github.com/tecbot/gorocksdb"
 	bolt "go.etcd.io/bbolt"
@@ -44,8 +45,8 @@ func getCurrentSeqNumBolt(db *bolt.DB) (int, error) {
 	return int(version.GetSeqNum()), nil
 }
 
-// GetCurrentSeqNumRocksDB returns the current seq-num found in the rocks DB.
-func GetCurrentSeqNumRocksDB(db *gorocksdb.DB) (int, error) {
+// getCurrentSeqNumRocksDB returns the current seq-num found in the rocks DB.
+func getCurrentSeqNumRocksDB(db *gorocksdb.DB) (int, error) {
 	var version storage.Version
 
 	opts := gorocksdb.NewDefaultReadOptions()
@@ -62,12 +63,16 @@ func GetCurrentSeqNumRocksDB(db *gorocksdb.DB) (int, error) {
 }
 
 func getCurrentSeqNum(databases *types.Databases) (int, error) {
+	// TODO: ROX-11922 updates for Postgres migrations (Should consider if we try to use
+	// Gorm to get/set version or pass pxpool in databases.  Current assumption is
+	// pxpool and use the store.)
+
 	boltSeqNum, err := getCurrentSeqNumBolt(databases.BoltDB)
 	if err != nil {
 		return 0, errors.Wrap(err, "getting current bolt sequence number")
 	}
 
-	writeHeavySeqNum, err := GetCurrentSeqNumRocksDB(databases.RocksDB)
+	writeHeavySeqNum, err := getCurrentSeqNumRocksDB(databases.RocksDB)
 	if err != nil {
 		return 0, errors.Wrap(err, "getting current rocksdb sequence number")
 	}
@@ -75,6 +80,7 @@ func getCurrentSeqNum(databases *types.Databases) (int, error) {
 		return 0, fmt.Errorf("bolt and rocksdb numbers mismatch: %d vs %d", boltSeqNum, writeHeavySeqNum)
 	}
 
+	log.WriteToStderrf("SHREWS -- getCurrentSeqNum -- number => %d", boltSeqNum)
 	return boltSeqNum, nil
 }
 

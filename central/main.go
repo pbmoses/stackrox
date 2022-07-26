@@ -56,7 +56,6 @@ import (
 	"github.com/stackrox/rox/central/globaldb"
 	dbAuthz "github.com/stackrox/rox/central/globaldb/authz"
 	globaldbHandlers "github.com/stackrox/rox/central/globaldb/handlers"
-	"github.com/stackrox/rox/central/globaldb/v2backuprestore/restore"
 	backupRestoreService "github.com/stackrox/rox/central/globaldb/v2backuprestore/service"
 	graphqlHandler "github.com/stackrox/rox/central/graphql/handler"
 	groupDataStore "github.com/stackrox/rox/central/group/datastore"
@@ -133,7 +132,6 @@ import (
 	"github.com/stackrox/rox/central/ui"
 	userService "github.com/stackrox/rox/central/user/service"
 	"github.com/stackrox/rox/central/version"
-	vStore "github.com/stackrox/rox/central/version/store"
 	vulnRequestManager "github.com/stackrox/rox/central/vulnerabilityrequest/manager/requestmgr"
 	vulnRequestService "github.com/stackrox/rox/central/vulnerabilityrequest/service"
 	"github.com/stackrox/rox/generated/storage"
@@ -168,6 +166,7 @@ import (
 	pkgMetrics "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/migrations"
 	"github.com/stackrox/rox/pkg/osutils"
+	"github.com/stackrox/rox/pkg/postgres/pgadmin"
 	"github.com/stackrox/rox/pkg/postgres/pgconfig"
 	"github.com/stackrox/rox/pkg/premain"
 	"github.com/stackrox/rox/pkg/sac"
@@ -175,6 +174,7 @@ import (
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
 	pkgVersion "github.com/stackrox/rox/pkg/version"
+	vStore "github.com/stackrox/rox/pkg/version/store"
 )
 
 var (
@@ -240,32 +240,32 @@ func main() {
 
 	devmode.StartOnDevBuilds("central")
 
+	log.Infof("Running StackRox Version: %s", pkgVersion.GetMainVersion())
+	ensureDB()
+
+	// Need to remove the backup replica and set the current version
 	if features.PostgresDatastore.Enabled() {
 		sourceMap, config, err := pgconfig.GetPostgresConfig()
 		if err != nil {
 			log.Errorf("Unable to get Postgres DB config: %v", err)
-			return
 		}
-		// Check to see if a restore DB exists, if so use it.
-		if restore.CheckIfRestoreDBExists(config) {
-			// Now flip the restore DB to be the primary DB
-			err := restore.SwitchToRestoredDB(sourceMap, config)
-			if err != nil {
-				log.Errorf("Unable to switch to restored DB: %v", err)
-			}
+
+		err = pgadmin.DropDB(sourceMap, config, migrations.BackupReplica())
+		if err != nil {
+			log.Errorf("Failed to remove backup DB: %v", err)
 		}
+
+		migrations.SetCurrentVersion(migrations.CurrentReplica(), config)
+
+	} else {
+		// Now that we verified that the DB can be loaded, remove the .backup directory
+		if err := migrations.SafeRemoveDBWithSymbolicLink(filepath.Join(migrations.DBMountPath(), migrations.BackupReplica())); err != nil {
+			log.Errorf("Failed to remove backup DB: %v", err)
+		}
+
+		// Update last associated software version on DBs.
+		migrations.SetCurrent(option.CentralOptions.DBPathBase)
 	}
-
-	log.Infof("Running StackRox Version: %s", pkgVersion.GetMainVersion())
-	ensureDB()
-
-	// Now that we verified that the DB can be loaded, remove the .backup directory
-	if err := migrations.SafeRemoveDBWithSymbolicLink(filepath.Join(migrations.DBMountPath(), ".backup")); err != nil {
-		log.Errorf("Failed to remove backup DB: %v", err)
-	}
-
-	// Update last associated software version on DBs.
-	migrations.SetCurrent(option.CentralOptions.DBPathBase)
 
 	// Start the prometheus metrics server
 	pkgMetrics.NewDefaultHTTPServer().RunForever()

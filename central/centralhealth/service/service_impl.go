@@ -46,6 +46,7 @@ func (s *serviceImpl) AuthFuncOverride(ctx context.Context, fullMethodName strin
 
 // GetUpgradeStatus returns the upgrade status for Central.
 func (s *serviceImpl) GetUpgradeStatus(ctx context.Context, empty *v1.Empty) (*v1.GetUpgradeStatusResponse, error) {
+	// TODO SHREWS: Need to take a look at this entire method to see what it is doing
 	// Check persistent storage
 	freeBytes, err := fsutils.AvailableBytesIn(migrations.DBMountPath())
 	if err != nil {
