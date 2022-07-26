@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/migrator/bolthelpers"
 	"github.com/stackrox/rox/migrator/compact"
@@ -19,6 +20,7 @@ import (
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/grpc/routes"
 	"github.com/stackrox/rox/pkg/migrations"
+	"github.com/stackrox/rox/pkg/postgres/pgadmin"
 	"github.com/stackrox/rox/pkg/postgres/pgconfig"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
 	"gorm.io/gorm"
@@ -122,12 +124,6 @@ func run() error {
 }
 
 func upgrade(conf *config.Config) error {
-	// TODO: ROX-10700 -- turn off migrations until Postgres updates complete.
-	if features.PostgresDatastore.Enabled() {
-		log.WriteToStderr("Postgres migrations are not ready yet.  Skipping....")
-		return nil
-	}
-
 	if err := compact.Compact(conf); err != nil {
 		log.WriteToStderrf("error compacting DB: %v", err)
 	}
@@ -156,17 +152,25 @@ func upgrade(conf *config.Config) error {
 	}()
 
 	var gormDB *gorm.DB
+	var pgPool *pgxpool.Pool
 	if features.PostgresDatastore.Enabled() {
 		gormDB, err = postgreshelper.Load(conf)
 		if err != nil {
 			return errors.Wrap(err, "failed to connect to postgres DB")
 		}
+
+		_, pgConf, err := pgconfig.GetPostgresConfig()
+		if err != nil {
+			return errors.Wrap(err, "failed to connect to postgres DB")
+		}
+		pgPool = pgadmin.GetReplicaPool(pgConf, pgconfig.GetActiveDB())
 	}
 
 	err = runner.Run(&types.Databases{
-		BoltDB:  boltDB,
-		RocksDB: rocksdb,
-		GormDB:  gormDB,
+		BoltDB:     boltDB,
+		RocksDB:    rocksdb,
+		GormDB:     gormDB,
+		PostgresDB: pgPool,
 	})
 	if err != nil {
 		return errors.Wrap(err, "migrations failed")

@@ -11,7 +11,6 @@ import (
 	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/logging"
-	"github.com/stackrox/rox/pkg/postgres/pgadmin"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/pkg/version"
@@ -62,11 +61,7 @@ func Read(dbPath string) (*MigrationVersion, error) {
 	return version, nil
 }
 
-func ReadVersion(dbName string, adminConfig *pgxpool.Config) (*MigrationVersion, error) {
-	// Get a pool connected to the replica we are checking the version of.
-	pool := pgadmin.GetReplicaPool(adminConfig, dbName)
-	defer pool.Close()
-
+func ReadVersion(pool *pgxpool.Pool) (*MigrationVersion, error) {
 	ctx := sac.WithGlobalAccessScopeChecker(context.Background(),
 		sac.AllowFixedScopes(
 			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
@@ -103,21 +98,25 @@ func SetCurrent(dbPath string) {
 	}
 }
 
-func SetCurrentVersion(dbName string, adminConfig *pgxpool.Config) {
-	if curr, err := ReadVersion(dbName, adminConfig); err != nil || curr.MainVersion != version.GetMainVersion() || curr.SeqNum != CurrentDBVersionSeqNum() {
-		pool := pgadmin.GetReplicaPool(adminConfig, dbName)
-		defer pool.Close()
+func SetCurrentVersion(pool *pgxpool.Pool) {
+	if curr, err := ReadVersion(pool); err != nil || curr.MainVersion != version.GetMainVersion() || curr.SeqNum != CurrentDBVersionSeqNum() {
 
-		ctx := sac.WithGlobalAccessScopeChecker(context.Background(),
-			sac.AllowFixedScopes(
-				sac.AccessModeScopeKeys(storage.Access_READ_WRITE_ACCESS),
-				sac.ResourceScopeKeys(resources.Version)))
-		store := vStore.New(ctx, pool)
+		newVersion := &storage.Version{SeqNum: int32(CurrentDBVersionSeqNum()), Version: version.GetMainVersion()}
 
-		err = store.Upsert(ctx, &storage.Version{SeqNum: int32(CurrentDBVersionSeqNum()), Version: version.GetMainVersion()})
-		if err != nil {
-			utils.Should(errors.Wrapf(err, "failed to write migration version to %s", dbName))
-		}
+		SetVersion(pool, newVersion)
+	}
+}
+
+func SetVersion(pool *pgxpool.Pool, updatedVersioon *storage.Version) {
+	ctx := sac.WithGlobalAccessScopeChecker(context.Background(),
+		sac.AllowFixedScopes(
+			sac.AccessModeScopeKeys(storage.Access_READ_WRITE_ACCESS),
+			sac.ResourceScopeKeys(resources.Version)))
+	store := vStore.New(ctx, pool)
+
+	err := store.Upsert(ctx, updatedVersioon)
+	if err != nil {
+		utils.Should(errors.Wrapf(err, "failed to write migration version to %s", pool.Config().ConnConfig.Database))
 	}
 }
 

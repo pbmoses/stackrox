@@ -9,6 +9,8 @@ import (
 	"github.com/stackrox/rox/migrator/bolthelpers"
 	"github.com/stackrox/rox/migrator/log"
 	"github.com/stackrox/rox/migrator/types"
+	"github.com/stackrox/rox/pkg/features"
+	"github.com/stackrox/rox/pkg/migrations"
 	"github.com/tecbot/gorocksdb"
 	bolt "go.etcd.io/bbolt"
 )
@@ -63,9 +65,14 @@ func getCurrentSeqNumRocksDB(db *gorocksdb.DB) (int, error) {
 }
 
 func getCurrentSeqNum(databases *types.Databases) (int, error) {
-	// TODO: ROX-11922 updates for Postgres migrations (Should consider if we try to use
-	// Gorm to get/set version or pass pxpool in databases.  Current assumption is
-	// pxpool and use the store.)
+	if features.PostgresDatastore.Enabled() {
+		migVer, err := migrations.ReadVersion(databases.PostgresDB)
+		if err != nil {
+			return 0, errors.Wrap(err, "getting current postgres sequence number")
+		}
+
+		return migVer.SeqNum, nil
+	}
 
 	boltSeqNum, err := getCurrentSeqNumBolt(databases.BoltDB)
 	if err != nil {
@@ -94,6 +101,13 @@ func updateRocksDB(db *gorocksdb.DB, versionBytes []byte) error {
 }
 
 func updateVersion(databases *types.Databases, newVersion *storage.Version) error {
+	if features.PostgresDatastore.Enabled() {
+
+		// TODO SHREWS:  Add some errors/handling.
+		migrations.SetVersion(databases.PostgresDB, newVersion)
+		return nil
+	}
+
 	versionBytes, err := proto.Marshal(newVersion)
 	if err != nil {
 		return errors.Wrap(err, "marshalling version")
